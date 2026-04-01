@@ -17,13 +17,13 @@ from services.database import DatabaseService
 from services.payment import PaymentService
 from services.notification import NotificationService
 
-# --- 2. IMPORT HANDLERS (Disesuaikan dengan arsitektur baru) ---
+# --- 2. IMPORT HANDLERS (Disesuaikan dengan file yang ada) ---
 from handlers import (
-    start, registration, account,  # profile.py sudah dilebur ke account.py
-    discovery, feed, preview, 
-    chat, inbox, unmask, match, 
-    who_like_me, who_see_me, 
-    wallet, pricing, boost,        # withdraw.py & referrals.py sudah dilebur ke wallet.py
+    start, registration, account,
+    discovery, feed, preview,
+    chat, inbox, unmask, match,
+    who_like_me, who_see_me,
+    wallet, pricing, boost,
     admin, help as help_handler
 )
 
@@ -65,17 +65,16 @@ async def schedule_daily_reset(db: DatabaseService):
         try:
             await db.check_expired_vip()
             await db.reset_daily_quotas()
-            if datetime.now(tz).weekday() == 0: # Hari Senin = Reset Boost
+            if datetime.now(tz).weekday() == 0:  # Hari Senin = Reset Boost
                 await db.reset_weekly_quotas()
             logging.info("✅ MAINTENANCE (Reset Kuota & Cek VIP) BERHASIL!")
         except Exception as e:
             logging.error(f"❌ Maintenance Error: {e}")
 
-# Memindahkan dummy cron job referral dari file referral lama ke main.py 
-# (Atau biarkan jika Anda punya scheduler.py terpisah)
 async def schedule_referral_evaluation_dummy():
+    """Dummy referral checker - akan diimplementasikan nanti"""
     while True:
-        await asyncio.sleep(86400) # Dummy 24 jam untuk placeholder
+        await asyncio.sleep(86400)
 
 async def main():
     logging.basicConfig(
@@ -104,10 +103,10 @@ async def main():
     
     db = DatabaseService(db_url)
     
-    # MENGGUNAKAN init_db() AGAR AUTO-ALTER TABLE BERJALAN
+    # Inisialisasi database dengan auto-migrate
     try:
         await db.init_db()
-        logging.info("✅ Database terinisialisasi dan tersinkronisasi (Auto-Migrate).")
+        logging.info("✅ Database terinisialisasi dan tersinkronisasi.")
     except Exception as e:
         logging.error(f"❌ Gagal sinkronisasi Database: {e}")
         return
@@ -122,15 +121,15 @@ async def main():
     dp["channel_id"] = os.getenv("CHANNEL_ID")
     dp["group_id"] = os.getenv("GROUP_ID")
 
-    # --- 6. REGISTRASI ROUTER (Sesuai Urutan Logika) ---
+    # --- 6. REGISTRASI ROUTER ---
     dp.include_router(registration.router)
     dp.include_router(start.router)
-    dp.include_router(account.router)  # Membawahi profil & setting
-    dp.include_router(wallet.router)   # Membawahi withdraw & referral
-    dp.include_router(pricing.router)  # Etalase Upgrade VIP
-    dp.include_router(chat.router)     # Ruang Obrolan
-    dp.include_router(inbox.router)    # Daftar Pesan Masuk
-    dp.include_router(unmask.router)   # Fitur Buka Anonim
+    dp.include_router(account.router)
+    dp.include_router(wallet.router)
+    dp.include_router(pricing.router)
+    dp.include_router(chat.router)
+    dp.include_router(inbox.router)
+    dp.include_router(unmask.router)
     dp.include_router(discovery.router)
     dp.include_router(feed.router)
     dp.include_router(preview.router)
@@ -145,8 +144,7 @@ async def main():
     @dp.error()
     async def global_error_handler(event: types.ErrorEvent):
         logging.error(f"⚠️ [CRITICAL ERROR]: {event.exception}")
-        # Jangan return True jika ingin error tetap tercetak utuh di console untuk debugging
-        pass 
+        return True
 
     daily_task = None
     referral_task = None
@@ -154,26 +152,28 @@ async def main():
     try:
         # --- 7. SET COMMAND MENU ---
         await set_bot_commands(bot)
-        logging.info("✔️ Tombol Menu Kiri Bawah (Command Scope) Berhasil Dipasang.")
+        logging.info("✔️ Tombol Menu Kiri Bawah Berhasil Dipasang.")
 
-        # --- 8. JALANKAN SCHEDULER (CRON JOBS) ---
+        # --- 8. JALANKAN SCHEDULER ---
         daily_task = asyncio.create_task(schedule_daily_reset(db))
         referral_task = asyncio.create_task(schedule_referral_evaluation_dummy())
 
         await bot.delete_webhook(drop_pending_updates=True)
-        logging.info("🚀 Bot PickMe Aktif & Siap Melayani (Zona WIB)!")
+        logging.info("🚀 Bot PickMe Aktif & Siap Melayani!")
         await dp.start_polling(bot)
 
     except Exception as e:
         logging.error(f"❌ Error Saat Menjalankan Bot: {e}")
 
     finally:
-        if daily_task: daily_task.cancel()
-        if referral_task: referral_task.cancel()
+        if daily_task:
+            daily_task.cancel()
+        if referral_task:
+            referral_task.cancel()
         await bot.session.close()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logging.info("🛑 Bot Berhenti Secara Aman (Graceful Shutdown).")
+        logging.info("🛑 Bot Berhenti Secara Aman.")
