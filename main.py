@@ -20,9 +20,8 @@ from services.notification import NotificationService
 # --- 2. IMPORT HANDLERS ---
 from handlers import (
     admin, start, feed, discovery, profile, help as help_handler,
-    pricing, boost, registration, status, preview,
-    withdraw, chat, inbox, unmask, notification as notifications_handler,
-    referrals, who_like_me, match
+    pricing, boost, registration, account, preview,
+    wallet, chat, inbox, unmask, who_like_me, match, who_see_me
 )
 from handlers.referrals import schedule_referral_evaluation
 
@@ -114,7 +113,7 @@ async def main():
     # --- 6. REGISTRASI ROUTER ---
     dp.include_router(registration.router)
     dp.include_router(start.router)
-    dp.include_router(referrals.router)
+    dp.include_router(chat.router)
     dp.include_router(admin.router)
     dp.include_router(feed.router)
     dp.include_router(discovery.router)
@@ -122,15 +121,14 @@ async def main():
     dp.include_router(preview.router)
     dp.include_router(who_like_me.router)
     dp.include_router(match.router)
-    dp.include_router(chat.router)
+    dp.include_router(wallet.router)
     dp.include_router(inbox.router)
     dp.include_router(unmask.router)
     dp.include_router(profile.router)
     dp.include_router(pricing.router)
     dp.include_router(boost.router)
-    dp.include_router(withdraw.router)
-    dp.include_router(status.router)
-    dp.include_router(notifications_handler.router)
+    dp.include_router(account.router)
+    dp.include_router(who_see_me.router)
 
     # --- 🛡️ GLOBAL ERROR HANDLER ---
     @dp.error()
