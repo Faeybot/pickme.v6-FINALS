@@ -8,7 +8,6 @@ router = Router()
 
 FINANCE_GROUP_ID = os.getenv("FINANCE_GROUP_ID") 
 
-# --- BANNER IMAGES (Bisa diatur di .env nanti) ---
 BANNER_STORE_MAIN = os.getenv("BANNER_STORE_MAIN", os.getenv("BANNER_PHOTO_ID"))
 BANNER_PREMIUM = os.getenv("BANNER_PREMIUM", BANNER_STORE_MAIN)
 BANNER_VIP = os.getenv("BANNER_VIP", BANNER_STORE_MAIN)
@@ -21,7 +20,8 @@ BANNER_EXTRA = os.getenv("BANNER_EXTRA", BANNER_STORE_MAIN)
 # ==========================================
 async def render_pricing_main_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, callback_id: str = None):
     user = await db.get_user(user_id)
-    if not user: return False
+    if not user:
+        return False
 
     await db.push_nav(user_id, "pricing_main")
 
@@ -42,13 +42,22 @@ async def render_pricing_main_ui(bot: Bot, chat_id: int, user_id: int, db: Datab
     
     media = InputMediaPhoto(media=BANNER_STORE_MAIN, caption=text, parse_mode="HTML")
 
-    try: await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
-    except Exception: pass
+    try:
+        await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
+    except Exception:
+        pass
     
     if callback_id:
-        try: await bot.answer_callback_query(callback_id)
-        except: pass
+        try:
+            await bot.answer_callback_query(callback_id)
+        except:
+            pass
     return True
+
+
+# Alias untuk kompatibilitas dengan start.py
+render_pricing_ui = render_pricing_main_ui
+
 
 @router.callback_query(F.data == "menu_pricing")
 async def show_pricing_store(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
@@ -60,10 +69,9 @@ async def show_pricing_store(callback: types.CallbackQuery, db: DatabaseService,
 # ==========================================
 @router.callback_query(F.data.startswith("p_detail_"))
 async def show_package_detail(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    package_type = callback.data.split("_")[2] # premium, vip, vipplus, extra
+    package_type = callback.data.split("_")[2]
     user = await db.get_user(callback.from_user.id)
     
-    # 1. Konten Premium (Verifikasi & WD)
     if package_type == "premium":
         photo_id = BANNER_PREMIUM
         text = (
@@ -82,7 +90,6 @@ async def show_package_detail(callback: types.CallbackQuery, db: DatabaseService
             [InlineKeyboardButton(text="⬅️ Kembali ke Etalase", callback_data="menu_pricing")]
         ])
 
-    # 2. Konten VIP Reguler
     elif package_type == "vip":
         photo_id = BANNER_VIP
         text = (
@@ -101,7 +108,6 @@ async def show_package_detail(callback: types.CallbackQuery, db: DatabaseService
             [InlineKeyboardButton(text="⬅️ Kembali ke Etalase", callback_data="menu_pricing")]
         ])
 
-    # 3. Konten VIP+ (Tertinggi)
     elif package_type == "vipplus":
         photo_id = BANNER_VIPPLUS
         text = (
@@ -120,7 +126,6 @@ async def show_package_detail(callback: types.CallbackQuery, db: DatabaseService
             [InlineKeyboardButton(text="⬅️ Kembali ke Etalase", callback_data="menu_pricing")]
         ])
 
-    # 4. Konten Extra Kuota & Boost
     elif package_type == "extra":
         photo_id = BANNER_EXTRA
         text = (
@@ -132,20 +137,19 @@ async def show_package_detail(callback: types.CallbackQuery, db: DatabaseService
             "📦 <b>Kuota Extra Permanen:</b>\n"
             "Kehabisan jatah DM hari ini? Beli kuota eceran yang tidak akan hangus sampai digunakan."
         )
-        # Tombol ini bisa dihubungkan ke modul boost.py Anda nantinya
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🛒 BELI TIKET BOOST", callback_data="dummy_buy_boost")],
             [InlineKeyboardButton(text="🛒 BELI KUOTA DM", callback_data="dummy_buy_quota")],
             [InlineKeyboardButton(text="⬅️ Kembali ke Etalase", callback_data="menu_pricing")]
         ])
-
     else:
         return await callback.answer("Paket tidak ditemukan.", show_alert=True)
 
-    # Eksekusi Render Detail
     media = InputMediaPhoto(media=photo_id, caption=text, parse_mode="HTML")
-    try: await bot.edit_message_media(chat_id=callback.message.chat.id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
-    except Exception: pass
+    try:
+        await bot.edit_message_media(chat_id=callback.message.chat.id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
+    except Exception:
+        pass
     await callback.answer()
 
 
@@ -154,7 +158,7 @@ async def show_package_detail(callback: types.CallbackQuery, db: DatabaseService
 # ==========================================
 @router.callback_query(F.data.startswith("req_trial_"))
 async def send_to_admin_group(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    package_type = callback.data.split("_")[2] # premium, vip, vipplus
+    package_type = callback.data.split("_")[2]
     user_id = callback.from_user.id
     username = f"@{callback.from_user.username}" if callback.from_user.username else "No Username"
     
@@ -167,8 +171,10 @@ async def send_to_admin_group(callback: types.CallbackQuery, db: DatabaseService
     
     kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Etalase", callback_data="menu_pricing")]])
 
-    try: await callback.message.edit_caption(caption=text_success, reply_markup=kb_back, parse_mode="HTML")
-    except: pass
+    try:
+        await callback.message.edit_caption(caption=text_success, reply_markup=kb_back, parse_mode="HTML")
+    except:
+        pass
 
     admin_text = (
         f"🎁 <b>REQUEST TRIAL (BETA)</b>\n"
@@ -187,12 +193,14 @@ async def send_to_admin_group(callback: types.CallbackQuery, db: DatabaseService
     ])
 
     if FINANCE_GROUP_ID:
-        try: await bot.send_message(FINANCE_GROUP_ID, admin_text, reply_markup=kb_admin, parse_mode="HTML")
-        except Exception as e: logging.error(f"Gagal kirim ke grup finance: {e}")
+        try:
+            await bot.send_message(FINANCE_GROUP_ID, admin_text, reply_markup=kb_admin, parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Gagal kirim ke grup finance: {e}")
             
     await callback.answer("Pengajuan Terkirim!", show_alert=True)
 
-# (Dummy handler untuk tombol eceran)
+
 @router.callback_query(F.data.startswith("dummy_buy_"))
 async def dummy_retail_buy(callback: types.CallbackQuery):
     await callback.answer("Etalase Eceran sedang disiapkan oleh Developer...", show_alert=True)
