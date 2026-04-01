@@ -19,6 +19,13 @@ BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 # ==========================================
 async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None, force_new: bool = False):
     """Menampilkan dashboard utama dengan navigasi inline"""
+    # ========== CLEANUP: Hapus ReplyKeyboard jika ada ==========
+    try:
+        temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
+        await bot.delete_message(chat_id, temp_msg.message_id)
+    except:
+        pass
+    
     if state:
         await state.clear()
     
