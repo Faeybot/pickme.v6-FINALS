@@ -17,13 +17,15 @@ from services.database import DatabaseService
 from services.payment import PaymentService
 from services.notification import NotificationService
 
-# --- 2. IMPORT HANDLERS ---
+# --- 2. IMPORT HANDLERS (Disesuaikan dengan arsitektur baru) ---
 from handlers import (
-    admin, start, feed, discovery, profile, help as help_handler,
-    pricing, boost, registration, account, preview,
-    wallet, chat, inbox, unmask, who_like_me, match, who_see_me
+    start, registration, account,  # profile.py sudah dilebur ke account.py
+    discovery, feed, preview, 
+    chat, inbox, unmask, match, 
+    who_like_me, who_see_me, 
+    wallet, pricing, boost,        # withdraw.py & referrals.py sudah dilebur ke wallet.py
+    admin, help as help_handler
 )
-from handlers.referrals import schedule_referral_evaluation
 
 # ==========================================
 # SETTING ZONA WAKTU KE ASIA/JAKARTA (UTC+7)
@@ -37,17 +39,15 @@ except Exception:
 
 load_dotenv()
 
-# MIDDLEWARE SPA (CleanUIMiddleware) TELAH DIHAPUS KARENA MENGGUNAKAN FULL INLINE KEYBOARD
-
 async def set_bot_commands(bot: Bot):
     """ Command scope default (tombol menu kiri bawah) """
     commands = [
         BotCommand(command="dashboard", description="🏠 Dashboard Utama"),
-        BotCommand(command="feed", description="🎭 Feed/Channel"),
         BotCommand(command="discovery", description="🌎 Swipe Jodoh"),
-        BotCommand(command="notifikasi", description="🔔 Notifikasi"),
-        BotCommand(command="finance", description="💳 Dompet/Reward"),
-        BotCommand(command="upgrade", description="💎 Upgrade/Topup"),
+        BotCommand(command="feed", description="🎭 Feed/Channel"),
+        BotCommand(command="inbox", description="💬 Pesan Masuk"),
+        BotCommand(command="wallet", description="💰 Dompet & Saldo"),
+        BotCommand(command="account", description="👤 Akun Saya"),
         BotCommand(command="help", description="💡 Panduan & Bantuan")
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
@@ -59,18 +59,24 @@ async def schedule_daily_reset(db: DatabaseService):
         next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         wait_seconds = (next_midnight - now).total_seconds()
         
-        logging.info(f"⏰ [SCHEDULER] Menunggu {wait_seconds / 3600:.2f} Jam menuju Maintenance.")
+        logging.info(f"⏰ [SCHEDULER] Menunggu {wait_seconds / 3600:.2f} Jam menuju Maintenance Reset Kuota.")
         await asyncio.sleep(wait_seconds)
         
         try:
             await db.check_expired_vip()
             await db.reset_daily_quotas()
-            if datetime.now(tz).weekday() == 0:
+            if datetime.now(tz).weekday() == 0: # Hari Senin = Reset Boost
                 await db.reset_weekly_quotas()
-            logging.info("✅ MAINTENANCE BERHASIL!")
+            logging.info("✅ MAINTENANCE (Reset Kuota & Cek VIP) BERHASIL!")
         except Exception as e:
             logging.error(f"❌ Maintenance Error: {e}")
-            
+
+# Memindahkan dummy cron job referral dari file referral lama ke main.py 
+# (Atau biarkan jika Anda punya scheduler.py terpisah)
+async def schedule_referral_evaluation_dummy():
+    while True:
+        await asyncio.sleep(86400) # Dummy 24 jam untuk placeholder
+
 async def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -97,7 +103,15 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     
     db = DatabaseService(db_url)
-    await db.create_tables()
+    
+    # MENGGUNAKAN init_db() AGAR AUTO-ALTER TABLE BERJALAN
+    try:
+        await db.init_db()
+        logging.info("✅ Database terinisialisasi dan tersinkronisasi (Auto-Migrate).")
+    except Exception as e:
+        logging.error(f"❌ Gagal sinkronisasi Database: {e}")
+        return
+
     payment = PaymentService(db)
     notif_service = NotificationService(bot, db)
 
@@ -105,67 +119,61 @@ async def main():
     dp["db"] = db
     dp["payment"] = payment
     dp["notif"] = notif_service 
-    
-    # Variabel Wajib untuk Pengecekan Awal (Iron Gate)
     dp["channel_id"] = os.getenv("CHANNEL_ID")
     dp["group_id"] = os.getenv("GROUP_ID")
 
-    # --- 6. REGISTRASI ROUTER ---
+    # --- 6. REGISTRASI ROUTER (Sesuai Urutan Logika) ---
     dp.include_router(registration.router)
     dp.include_router(start.router)
-    dp.include_router(chat.router)
-    dp.include_router(admin.router)
-    dp.include_router(feed.router)
+    dp.include_router(account.router)  # Membawahi profil & setting
+    dp.include_router(wallet.router)   # Membawahi withdraw & referral
+    dp.include_router(pricing.router)  # Etalase Upgrade VIP
+    dp.include_router(chat.router)     # Ruang Obrolan
+    dp.include_router(inbox.router)    # Daftar Pesan Masuk
+    dp.include_router(unmask.router)   # Fitur Buka Anonim
     dp.include_router(discovery.router)
-    dp.include_router(help_handler.router)
+    dp.include_router(feed.router)
     dp.include_router(preview.router)
-    dp.include_router(who_like_me.router)
     dp.include_router(match.router)
-    dp.include_router(wallet.router)
-    dp.include_router(inbox.router)
-    dp.include_router(unmask.router)
-    dp.include_router(profile.router)
-    dp.include_router(pricing.router)
-    dp.include_router(boost.router)
-    dp.include_router(account.router)
+    dp.include_router(who_like_me.router)
     dp.include_router(who_see_me.router)
+    dp.include_router(boost.router)
+    dp.include_router(help_handler.router)
+    dp.include_router(admin.router)
 
     # --- 🛡️ GLOBAL ERROR HANDLER ---
     @dp.error()
     async def global_error_handler(event: types.ErrorEvent):
         logging.error(f"⚠️ [CRITICAL ERROR]: {event.exception}")
-        return True 
+        # Jangan return True jika ingin error tetap tercetak utuh di console untuk debugging
+        pass 
 
-    # 🛠️ VARIABEL TASK (GARBAGE COLLECTOR SAFETY)
     daily_task = None
     referral_task = None
 
     try:
         # --- 7. SET COMMAND MENU ---
         await set_bot_commands(bot)
-        logging.info("✔️ Tombol Menu Biru Berhasil Dipasang.")
+        logging.info("✔️ Tombol Menu Kiri Bawah (Command Scope) Berhasil Dipasang.")
 
-        # --- 8. JALANKAN SCHEDULER ---
-        referral_task = asyncio.create_task(schedule_referral_evaluation(bot, db))
+        # --- 8. JALANKAN SCHEDULER (CRON JOBS) ---
         daily_task = asyncio.create_task(schedule_daily_reset(db))
+        referral_task = asyncio.create_task(schedule_referral_evaluation_dummy())
 
         await bot.delete_webhook(drop_pending_updates=True)
-        print("🚀 Bot PickMe Aktif & Tahan Banting (WIB)!")
+        logging.info("🚀 Bot PickMe Aktif & Siap Melayani (Zona WIB)!")
         await dp.start_polling(bot)
 
     except Exception as e:
         logging.error(f"❌ Error Saat Menjalankan Bot: {e}")
 
     finally:
-        # Bersihkan task saat shutdown
-        if daily_task:
-            daily_task.cancel()
-        if referral_task:
-            referral_task.cancel()
+        if daily_task: daily_task.cancel()
+        if referral_task: referral_task.cancel()
         await bot.session.close()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logging.info("Bot Berhenti Secara Aman.")
+        logging.info("🛑 Bot Berhenti Secara Aman (Graceful Shutdown).")
