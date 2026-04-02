@@ -514,46 +514,59 @@ async def manage_photos_handler(callback: types.CallbackQuery, db: DatabaseServi
     await manage_photos(callback, db)
     await callback.answer()
 
-
 # ==========================================
-# GANTI FOTO UTAMA
+# GANTI FOTO UTAMA (MENGGUNAKAN LOGIKA REGISTRASI)
 # ==========================================
 @router.callback_query(F.data == "change_photo_main")
 async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ BATAL", callback_data="manage_photos")]
+        [InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]
     ])
-    try:
-        await callback.message.edit_caption(
-            caption="📸 Kirimkan <b>1 Foto Utama</b> yang baru untuk profil Anda:",
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logging.error(f"start_change_main edit failed: {e}")
+    
+    await callback.message.edit_caption(
+        caption="📸 <b>GANTI FOTO UTAMA</b>\n\nKirimkan foto baru untuk profil Anda:",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
     await state.set_state(EditProfile.waiting_for_photo_main)
     await callback.answer()
 
 
 @router.message(EditProfile.waiting_for_photo_main, F.photo)
-async def save_new_main(message: types.Message, db: DatabaseService, state: FSMContext):
-    await db.update_main_photo(message.from_user.id, message.photo[-1].file_id)
-    await state.clear()
+async def save_new_main(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+    """Simpan foto utama baru - menggunakan logika seperti registrasi"""
     
+    # Simpan foto
+    await db.update_main_photo(message.from_user.id, message.photo[-1].file_id)
+    
+    # Hapus pesan user
     try:
         await message.delete()
     except:
         pass
     
-    sukses = await message.answer("✅ <b>Foto Utama berhasil diganti!</b>", parse_mode="HTML")
-    await asyncio.sleep(1.5)
-    try:
-        await sukses.delete()
-    except:
-        pass
+    # Kirim pesan sukses (seperti di registrasi)
+    await message.answer("✅ Foto utama berhasil diganti!", parse_mode="HTML")
     
-    # 🛠️ KRUSIAL: Kembali ke Manajemen Galeri menggunakan MockCallbackQuery
-    await manage_photos(MockCallbackQuery(message), db)
+    # Bersihkan state
+    await state.clear()
+    
+    # 🚨 KRUSIAL: Kembali ke menu manajemen foto
+    # Buat callback query palsu seperti yang dilakukan di registration.py
+    from aiogram.types import CallbackQuery
+    
+    # Buat objek callback palsu
+    fake_callback = types.CallbackQuery(
+        id="fake",
+        from_user=message.from_user,
+        message=message,
+        chat_instance="fake",
+        data="manage_photos"
+    )
+    
+    # Panggil handler manage_photos
+    from handlers.account import manage_photos_handler
+    await manage_photos_handler(fake_callback, db, bot)
 
 
 # ==========================================
@@ -562,51 +575,54 @@ async def save_new_main(message: types.Message, db: DatabaseService, state: FSMC
 @router.callback_query(F.data == "add_photo_extra")
 async def start_add_extra(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ BATAL", callback_data="manage_photos")]
+        [InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]
     ])
-    try:
-        await callback.message.edit_caption(
-            caption="📸 Kirimkan <b>Foto Tambahan</b> Anda:",
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logging.error(f"start_add_extra edit failed: {e}")
+    
+    await callback.message.edit_caption(
+        caption="📸 <b>TAMBAH FOTO EXTRA</b>\n\nKirimkan foto tambahan (maksimal 2):",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
     await state.set_state(EditProfile.waiting_for_photo_extra)
     await callback.answer()
 
 
 @router.message(EditProfile.waiting_for_photo_extra, F.photo)
-async def save_new_extra(message: types.Message, db: DatabaseService, state: FSMContext):
-    await db.manage_extra_photo(message.from_user.id, message.photo[-1].file_id, action='add')
-    await state.clear()
+async def save_new_extra(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+    """Simpan foto extra baru - menggunakan logika seperti registrasi"""
     
+    # Cek batas maksimal
+    user = await db.get_user(message.from_user.id)
+    extra = user.extra_photos or []
+    
+    if len(extra) >= 2:
+        await message.answer("⚠️ Maksimal 2 foto tambahan! Hapus beberapa foto terlebih dahulu.", parse_mode="HTML")
+        await state.clear()
+        return
+    
+    # Simpan foto
+    await db.manage_extra_photo(message.from_user.id, message.photo[-1].file_id, action='add')
+    
+    # Hapus pesan user
     try:
         await message.delete()
     except:
         pass
     
-    sukses = await message.answer("✅ <b>Foto Tambahan berhasil disimpan!</b>", parse_mode="HTML")
-    await asyncio.sleep(1.5)
-    try:
-        await sukses.delete()
-    except:
-        pass
+    # Kirim pesan sukses
+    await message.answer("✅ Foto tambahan berhasil disimpan!", parse_mode="HTML")
     
-    # 🛠️ KRUSIAL: Kembali ke Manajemen Galeri menggunakan MockCallbackQuery
-    await manage_photos(MockCallbackQuery(message), db)
-
-
-# ==========================================
-# HAPUS SEMUA FOTO EXTRA
-# ==========================================
-@router.callback_query(F.data == "clear_photo_extra")
-async def clear_photos(callback: types.CallbackQuery, db: DatabaseService):
-    async with db.session_factory() as session:
-        from services.database import User as UserTable
-        user = await session.get(UserTable, callback.from_user.id)
-        if user:
-            user.extra_photos = []
-            await session.commit()
-    await callback.answer("🗑️ Foto Extra dihapus!", show_alert=True)
-    await manage_photos(callback, db)
+    # Bersihkan state
+    await state.clear()
+    
+    # Kembali ke menu manajemen foto
+    fake_callback = types.CallbackQuery(
+        id="fake",
+        from_user=message.from_user,
+        message=message,
+        chat_instance="fake",
+        data="manage_photos"
+    )
+    
+    from handlers.account import manage_photos_handler
+    await manage_photos_handler(fake_callback, db, bot)
