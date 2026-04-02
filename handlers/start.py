@@ -76,17 +76,12 @@ async def render_notification_hub(message_or_callback, db: DatabaseService, bot:
     else:
         await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
 
-async def render_account_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
-    user = await db.get_user(user_id)
-    kasta = "💎 VIP+" if user.is_vip_plus else "🌟 VIP" if user.is_vip else "🎭 PREMIUM" if user.is_premium else "👤 FREE"
-    text = f"⚙️ <b>PUSAT AKUN & STATUS</b>\n\nKelola bagaimana profilmu tampil di <i>Discovery</i> dan pantau sisa kuota harian tier <b>{kasta}</b> kamu hari ini."
-    kb = UIManager.get_account_center_kb()
-    
-    media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
-    if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
-    else:
-        await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+
+# ==========================================
+# 🔥 PERUBAHAN 1: HAPUS render_account_hub (akan ditangani account.py)
+# ==========================================
+# Fungsi render_account_hub dihapus karena akan ditangani sepenuhnya oleh account.py
+
 
 async def render_finance_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
     user = await db.get_user(user_id)
@@ -175,9 +170,12 @@ async def back_to_dashboard_callback(callback: types.CallbackQuery, db: Database
 async def cb_menu_notifications(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     await render_notification_hub(callback, db, bot, callback.from_user.id)
 
+# 🔥 PERUBAHAN 2: menu_account LANGSUNG ke account.py (bukan ke render_account_hub)
 @router.callback_query(F.data == "menu_account")
-async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    await render_account_hub(callback, db, bot, callback.from_user.id)
+async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    """GERBANG: Arahkan langsung ke account.py (bukan render_account_hub)"""
+    from handlers.account import render_account_hub
+    await render_account_hub(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
 @router.callback_query(F.data == "menu_finance")
 async def cb_menu_finance(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
@@ -196,8 +194,8 @@ async def cb_menu_discovery(callback: types.CallbackQuery, db: DatabaseService, 
     await render_discovery_ui(bot, callback.message.chat.id, callback.from_user.id, db, state)
     await callback.answer()
     
+# 🔥 PERUBAHAN 3: menu_pricing panggil render_pricing_main_ui (bukan render_pricing_ui)
 @router.callback_query(F.data == "menu_pricing")
 async def cb_menu_pricing(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    from handlers.pricing import render_pricing_ui
-    await render_pricing_ui(bot, callback.message.chat.id, callback.from_user.id, db)
-    await callback.answer()
+    from handlers.pricing import render_pricing_main_ui
+    await render_pricing_main_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
