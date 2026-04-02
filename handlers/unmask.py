@@ -4,33 +4,44 @@ import datetime
 import html
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardRemove
 from services.database import DatabaseService
 
 router = Router()
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 ITEMS_PER_PAGE = 5
 
-# ==========================================
-# HELPER: FORMATTER WAKTU
-# ==========================================
+
 def get_time_left(expires_at: int) -> str:
-    if not expires_at: return "Habis"
+    """Format sisa waktu chat"""
+    if not expires_at:
+        return "Habis"
     now = int(datetime.datetime.now().timestamp())
-    if expires_at <= now: return "Habis"
+    if expires_at <= now:
+        return "Habis"
     
     diff = expires_at - now
     hours = diff // 3600
     minutes = (diff % 3600) // 60
     
-    if hours > 0: return f"{hours}j {minutes}m"
+    if hours > 0:
+        return f"{hours}j {minutes}m"
     return f"{minutes}m"
+
 
 # ==========================================
 # 1. CORE UI RENDERER: DAFTAR UNMASK
 # ==========================================
 async def render_unmask_list(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, page: int = 0, message_id: int = None):
-    # Mengambil daftar VIP+ yang melakukan UNMASK ke user ini
+    """Menampilkan daftar VIP+ yang melakukan unmask"""
+    
+    # Cleanup ReplyKeyboard
+    try:
+        temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
+        await bot.delete_message(chat_id, temp_msg.message_id)
+    except:
+        pass
+    
     unmaskers = await db.get_interaction_list(user_id, "UNMASK_CHAT", limit=50)
     
     text_content = "🔓 <b>DAFTAR BONGKAR ANONIM (SULTAN VIP+)</b>\n<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
@@ -44,13 +55,12 @@ async def render_unmask_list(bot: Bot, chat_id: int, user_id: int, db: DatabaseS
         end_idx = start_idx + ITEMS_PER_PAGE
         current_unmaskers = unmaskers[start_idx:end_idx]
         
-        text_content += f"Ada <b>{len(unmaskers)}</b> Sultan VIP+ yang sangat tertarik dengan postinganmu hingga rela membayar untuk membongkar profilmu!\n<i>Pilih profil untuk melihat detail:</i>\n"
+        text_content += f"Ada <b>{len(unmaskers)}</b> Sultan VIP+ yang sangat tertarik dengan postinganmu hingga rela membayar untuk membongkar profilmu!\n<i>Pilih profil untuk melihat detail:</i>\n\n"
         
         kb_buttons = []
         now = int(datetime.datetime.now().timestamp())
         
         for person in current_unmaskers:
-            # Cek sesi chat aktif
             session_data = await db.get_active_chat_session(person.id, user_id)
             expires_at = session_data.expires_at if session_data else 0
             
@@ -58,35 +68,50 @@ async def render_unmask_list(bot: Bot, chat_id: int, user_id: int, db: DatabaseS
             is_active = expires_at > now
             status_icon = "🟢" if is_active else "🔴"
             
-            name_short = person.full_name[:10]
+            name_short = person.full_name[:12] if person.full_name else "Unknown"
             city_short = person.location_name[:10] if person.location_name else "Unknown"
             
             btn_text = f"{status_icon} {name_short}, {person.age}th, {city_short} ({time_str})"
             kb_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"unm_v_{person.id}_{page}")])
-                
+        
         # Navigasi Paginasi
         nav_row = []
-        if page > 0: nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"unm_p_{page-1}"))
-        if page < total_pages - 1: nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"unm_p_{page+1}"))
-        if nav_row: kb_buttons.append(nav_row)
-            
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"unm_p_{page-1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"unm_p_{page+1}"))
+        if nav_row:
+            kb_buttons.append(nav_row)
+        
         kb_buttons.append([InlineKeyboardButton(text="⬅️ Kembali ke Notifikasi", callback_data="menu_notifications")])
         kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
-
+    
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text_content, parse_mode="HTML")
     
     if message_id:
-        try: await bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=media, reply_markup=kb)
-        except Exception: pass
+        try:
+            await bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=media, reply_markup=kb)
+        except Exception:
+            pass
     else:
-        await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text_content, reply_markup=kb, parse_mode="HTML")
+        user = await db.get_user(user_id)
+        if user and user.anchor_msg_id:
+            try:
+                await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
+            except:
+                sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text_content, reply_markup=kb, parse_mode="HTML")
+                await db.update_anchor_msg(user_id, sent.message_id)
+        else:
+            sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text_content, reply_markup=kb, parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
 
-# --- HANDLER NAVIGASI UNMASK LIST ---
+
 @router.callback_query(F.data == "notif_unmask")
 async def handle_open_unmask(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     await db.push_nav(callback.from_user.id, "unmask")
     await render_unmask_list(bot, callback.message.chat.id, callback.from_user.id, db, page=0, message_id=callback.message.message_id)
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("unm_p_"))
 async def handle_unmask_pagination(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
@@ -100,12 +125,13 @@ async def handle_unmask_pagination(callback: types.CallbackQuery, db: DatabaseSe
 # ==========================================
 @router.callback_query(F.data.startswith("unm_v_"))
 async def view_unmasker_profile(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    target_id = int(callback.data.split("_")[2]) # ID Sultan VIP+
+    target_id = int(callback.data.split("_")[2])
     page = int(callback.data.split("_")[3])
     user_id = callback.from_user.id
     
     target = await db.get_user(target_id)
-    if not target: return await callback.answer("Profil Sultan tidak ditemukan.", show_alert=True)
+    if not target:
+        return await callback.answer("Profil Sultan tidak ditemukan.", show_alert=True)
     
     # Cek durasi chat
     session_data = await db.get_active_chat_session(target_id, user_id)
@@ -116,20 +142,31 @@ async def view_unmasker_profile(callback: types.CallbackQuery, db: DatabaseServi
     minat = target.interests.replace(",", ", ") if target.interests else "-"
     target_loc = html.escape(target.location_name) if target.location_name else "-"
     target_bio = html.escape(target.bio) if target.bio else "-"
+    
+    # Tentukan kasta target
+    if target.is_vip_plus:
+        kasta = "💎 VIP+"
+    elif target.is_vip:
+        kasta = "🌟 VIP"
+    elif target.is_premium:
+        kasta = "🎭 PREMIUM"
+    else:
+        kasta = "👤 FREE"
 
     text_full = (
         f"👑 <b>SULTAN VIP+ MENGINCARMU!</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━</code>\n"
         f"👤 <b>{target.full_name.upper()}, {target.age} Tahun</b>\n"
+        f"👑 Kasta: {kasta}\n"
         f"📍 <b>Kota:</b> {target_loc}\n"
         f"🔥 <b>Minat:</b> {minat}\n"
         f"📝 <b>Bio:</b>\n<i>{target_bio}</i>\n"
         f"<code>━━━━━━━━━━━━━━━━━━</code>\n"
         f"🎁 <b>INFO BONUS:</b>\n"
-        f"Setiap member yang Unmask profilmu, kamu mendapat <b>500 poin</b>.\n"
-        f"Buka, balas, dan Kirim pesan ke VIP+ ini untuk klaim extra bonus poin <b>+500</b>!"
+        f"• Member yang Unmask profilmu, kamu mendapat <b>500 poin</b>\n"
+        f"• Balas pesan VIP+ ini untuk klaim extra bonus <b>+500 Poin</b>!"
     )
-
+    
     kb_buttons = []
     
     if is_active:
@@ -139,13 +176,15 @@ async def view_unmasker_profile(callback: types.CallbackQuery, db: DatabaseServi
     else:
         text_full += f"\n\n🔴 <i>Sesi obrolan 48 jam telah berakhir. Butuh 1 Kuota Pesan untuk membukanya kembali.</i>"
         kb_buttons.append([InlineKeyboardButton(text="🔒 Buka Kembali Obrolan (1 Kuota)", callback_data=f"unm_xt_{target_id}_{page}")])
-        
+    
     kb_buttons.append([InlineKeyboardButton(text="⬅️ Kembali ke Daftar", callback_data=f"unm_p_{page}")])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
     
     media = InputMediaPhoto(media=target.photo_id, caption=text_full, parse_mode="HTML")
-    try: await callback.message.edit_media(media=media, reply_markup=kb)
-    except: pass
+    try:
+        await callback.message.edit_media(media=media, reply_markup=kb)
+    except:
+        pass
     
     # Tandai notifikasi sebagai sudah dibaca
     await db.mark_notif_read(user_id, target_id, "UNMASK_CHAT")
@@ -165,14 +204,16 @@ async def execute_unmask_chat(callback: types.CallbackQuery, db: DatabaseService
         return await callback.answer("⏳ Waktu obrolan sudah habis! Silakan perpanjang sesi.", show_alert=True)
     
     # 💰 DISTRIBUSI EXTRA BONUS +500 POIN (Tahap 2)
-    log_key = f"UnmaskReplyBonus_{target_id}_{user_id}" 
+    log_key = f"UnmaskReplyBonus_{target_id}_{user_id}"
     bonus_exists = await db.check_bonus_exists(log_key)
     if not bonus_exists:
         sukses = await db.add_points_with_log(user_id, 500, log_key)
         if sukses:
-            try: await callback.message.answer("🎉 <b>BONUS KLAIM BERHASIL!</b>\nKamu mendapatkan <b>+500 Poin Extra</b> karena berinisiatif membalas Sultan.", parse_mode="HTML")
-            except: pass
-            
+            try:
+                await callback.message.answer("🎉 <b>BONUS KLAIM BERHASIL!</b>\nKamu mendapatkan <b>+500 Poin Extra</b> karena berinisiatif membalas Sultan.", parse_mode="HTML")
+            except:
+                pass
+    
     await callback.answer("Memasuki ruang obrolan...", show_alert=False)
     
     # 🚀 HANDOFF KE CHAT.PY
@@ -190,7 +231,8 @@ async def prompt_extend_unmask(callback: types.CallbackQuery, db: DatabaseServic
     page = int(parts[3])
     
     target = await db.get_user(target_id)
-    if not target: return await callback.answer("User tidak ditemukan.", show_alert=True)
+    if not target:
+        return await callback.answer("User tidak ditemukan.", show_alert=True)
     
     text = (
         f"🔴 <b>SESI BERAKHIR</b>\n"
@@ -205,9 +247,12 @@ async def prompt_extend_unmask(callback: types.CallbackQuery, db: DatabaseServic
         [InlineKeyboardButton(text="❌ BATAL", callback_data=f"unm_p_{page}")]
     ])
     
-    try: await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-    except: pass
+    try:
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+    except:
+        pass
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("unm_ok_"))
 async def confirm_extend_unmask(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
@@ -217,7 +262,7 @@ async def confirm_extend_unmask(callback: types.CallbackQuery, db: DatabaseServi
     success = await db.use_message_quota(user_id)
     if not success:
         return await callback.answer("❌ Kuota DM (Kirim Pesan) Anda habis! Silakan Topup/Upgrade.", show_alert=True)
-        
+    
     expiry_24h = int((datetime.datetime.now() + datetime.timedelta(hours=24)).timestamp())
     await db.upsert_chat_session(user_id, target_id, expires_at=expiry_24h)
     
