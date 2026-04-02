@@ -15,7 +15,7 @@ router = Router()
 
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 FINANCE_GROUP_ID = os.getenv("FINANCE_GROUP_ID")
-POIN_TO_IDR_RATE = 0.1  # 10 Poin = Rp 1
+POIN_TO_IDR_RATE = 0.1
 
 
 class WithdrawState(StatesGroup):
@@ -26,12 +26,12 @@ class WithdrawState(StatesGroup):
 
 
 # ==========================================
-# 1. RENDERER UTAMA: WALLET HUB (DIPANGGIL DARI START.PY)
+# 1. RENDERER UTAMA: WALLET HUB
 # ==========================================
 async def render_wallet_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None):
-    """Menu utama Dompet - Hanya gerbang ke sub-menu"""
+    """Menu utama Dompet"""
     
-    # Cleanup
+    # Cleanup ReplyKeyboard
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id, temp_msg.message_id)
@@ -50,25 +50,16 @@ async def render_wallet_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseSe
     saldo_rp = int(user.poin_balance * POIN_TO_IDR_RATE)
     
     text = (
-        f"💰 <b>DOMPET & REWARD PENGHASILAN</b>\n"
+        f"💰 <b>DOMPET & REWARD</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-        f"<b>💎 SALDO AKTIF ANDA:</b>\n"
-        f"🪙 Poin: <b>{user.poin_balance:,} Poin</b>\n"
-        f"💵 Estimasi: <b>Rp {saldo_rp:,}</b>\n\n"
-        
-        f"<b>📊 RINCIAN PENDAPATAN:</b>\n"
-        f"• Profil Dilihat: <b>+100 Poin</b>\n"
-        f"• Pesan Masuk: <b>+100 Poin</b>\n"
-        f"🎁 Bonus Balas Chat: <b>+200 Poin</b>\n"
-        f"• Unmask Profil: <b>+500 Poin</b>\n"
-        f"🎁 Bonus Balas Unmask: <b>+500 Poin</b>\n\n"
-        
-        f"👇 <i>Pilih menu di bawah ini:</i>"
+        f"Saldo Poin: <b>{user.poin_balance:,} Poin</b>\n"
+        f"Estimasi: <b>Rp {saldo_rp:,}</b>\n\n"
+        f"Bagikan <i>link</i> referralmu untuk mendapatkan koin tambahan, atau cairkan poinmu menjadi uang tunai (Syarat: Status Premium)."
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏧 TARIK SALDO (WITHDRAW)", callback_data="menu_withdraw")],
-        [InlineKeyboardButton(text="🎁 PROGRAM REFERRAL (AJAK TEMAN)", callback_data="menu_referral")],
+        [InlineKeyboardButton(text="🏧 Withdraw Poin", callback_data="wallet_withdraw")],
+        [InlineKeyboardButton(text="🎁 Cek Referral", callback_data="wallet_referral")],
         [InlineKeyboardButton(text="⬅️ Kembali ke Dashboard", callback_data="back_to_dashboard")]
     ])
     
@@ -78,34 +69,34 @@ async def render_wallet_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseSe
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
             await bot.answer_callback_query(callback_id)
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Edit media gagal: {e}")
     else:
         try:
             sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
             await db.update_anchor_msg(user_id, sent.message_id)
         except Exception as e:
-            logging.error(f"Gagal render wallet hub: {e}")
+            logging.error(f"Kirim ulang gagal: {e}")
     
     return True
 
 
 # ==========================================
-# 2. SUB-MENU: WITHDRAW
+# 2. HANDLER: WITHDRAW
 # ==========================================
-@router.callback_query(F.data == "menu_withdraw")
-async def start_withdraw(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext):
-    """Memulai proses withdraw"""
+@router.callback_query(F.data == "wallet_withdraw")
+async def handle_withdraw(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext):
+    """Handler untuk tombol Withdraw"""
     user = await db.get_user(callback.from_user.id)
     
     if not user.is_premium:
-        text_lock = "🔒 <b>AKSES TERKUNCI</b>\n\n<i>Hanya akun <b>Premium</b> yang bisa mencairkan poin menjadi uang tunai.</i>"
-        kb_lock = InlineKeyboardMarkup(inline_keyboard=[
+        text = "🔒 <b>AKSES TERKUNCI</b>\n\nHanya akun <b>Premium</b> yang bisa mencairkan poin menjadi uang tunai."
+        kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💎 DAFTAR PREMIUM SEKARANG", callback_data="menu_pricing")],
             [InlineKeyboardButton(text="⬅️ Kembali ke Dompet", callback_data="menu_finance")]
         ])
         try:
-            await callback.message.edit_caption(caption=text_lock, reply_markup=kb_lock, parse_mode="HTML")
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
         except:
             pass
         return await callback.answer()
@@ -114,10 +105,10 @@ async def start_withdraw(callback: types.CallbackQuery, db: DatabaseService, sta
     min_wd_poin = int(min_wd_rp / POIN_TO_IDR_RATE)
     
     if user.poin_balance < min_wd_poin:
-        text_err = f"⚠️ <b>SALDO TIDAK CUKUP</b>\n\nMinimal penarikan: <b>Rp {min_wd_rp:,}</b> ({min_wd_poin:,} Poin)"
-        kb_err = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="menu_finance")]])
+        text = f"⚠️ <b>SALDO TIDAK CUKUP</b>\n\nMinimal penarikan: <b>Rp {min_wd_rp:,}</b> ({min_wd_poin:,} Poin)\nSaldo Anda: {user.poin_balance:,} Poin"
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="menu_finance")]])
         try:
-            await callback.message.edit_caption(caption=text_err, reply_markup=kb_err, parse_mode="HTML")
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
         except:
             pass
         return await callback.answer()
@@ -126,7 +117,7 @@ async def start_withdraw(callback: types.CallbackQuery, db: DatabaseService, sta
         f"💸 <b>PENCAIRAN SALDO</b>\n\n"
         f"Saldo Aktif: <b>{user.poin_balance:,} Poin</b>\n"
         f"Minimal Tarik: <b>{min_wd_poin:,} Poin</b>\n\n"
-        f"✍️ <i>Ketik nominal <b>POIN</b> yang ingin ditarik:</i>"
+        f"✍️ <i>Ketik nominal <b>POIN</b> yang ingin ditarik (tanpa titik/koma):</i>"
     )
     
     try:
@@ -140,6 +131,7 @@ async def start_withdraw(callback: types.CallbackQuery, db: DatabaseService, sta
 
 @router.message(WithdrawState.waiting_amount)
 async def process_wd_amount(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+    """Memproses input nominal withdraw"""
     user = await db.get_user(message.from_user.id)
     try:
         await message.delete()
@@ -159,8 +151,17 @@ async def process_wd_amount(message: types.Message, state: FSMContext, db: Datab
     min_wd_rp = 50000 if getattr(user, 'has_withdrawn_before', False) else 20000
     min_wd_poin = int(min_wd_rp / POIN_TO_IDR_RATE)
     
-    if amount_poin < min_wd_poin or amount_poin > user.poin_balance:
-        err = await message.answer(f"⚠️ Nominal tidak valid. Min: {min_wd_poin}, Maks: {user.poin_balance}.")
+    if amount_poin < min_wd_poin:
+        err = await message.answer(f"⚠️ Nominal terlalu kecil. Minimal: {min_wd_poin:,} Poin")
+        await asyncio.sleep(2)
+        try:
+            await err.delete()
+        except:
+            pass
+        return
+    
+    if amount_poin > user.poin_balance:
+        err = await message.answer(f"⚠️ Nominal melebihi saldo. Maksimal: {user.poin_balance:,} Poin")
         await asyncio.sleep(2)
         try:
             await err.delete()
@@ -190,6 +191,7 @@ async def process_wd_amount(message: types.Message, state: FSMContext, db: Datab
 
 @router.callback_query(F.data.startswith("wd_wallet_"), WithdrawState.waiting_wallet_type)
 async def process_wallet_type(callback: types.CallbackQuery, state: FSMContext):
+    """Memproses pilihan wallet type"""
     wallet_type = callback.data.split("_")[2]
     await state.update_data(wd_wallet_type=wallet_type)
     label = "Nama Bank & No Rekening" if wallet_type == "BANK" else "Nomor Handphone"
@@ -205,6 +207,7 @@ async def process_wallet_type(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(WithdrawState.waiting_wallet_number)
 async def process_wallet_number(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+    """Memproses input nomor wallet"""
     await state.update_data(wd_wallet_number=message.text)
     user = await db.get_user(message.from_user.id)
     try:
@@ -222,6 +225,7 @@ async def process_wallet_number(message: types.Message, state: FSMContext, db: D
 
 @router.message(WithdrawState.waiting_wallet_name)
 async def process_wallet_name(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+    """Memproses input nama pemilik wallet dan menyelesaikan withdraw"""
     await state.update_data(wd_wallet_name=message.text)
     data = await state.get_data()
     try:
@@ -279,11 +283,11 @@ async def process_wallet_name(message: types.Message, state: FSMContext, db: Dat
 
 
 # ==========================================
-# 3. SUB-MENU: REFERRAL
+# 3. HANDLER: REFERRAL
 # ==========================================
-@router.callback_query(F.data == "menu_referral")
-async def show_referral(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    """Menampilkan info referral"""
+@router.callback_query(F.data == "wallet_referral")
+async def handle_referral(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    """Handler untuk tombol Referral"""
     user = await db.get_user(callback.from_user.id)
     bot_info = await bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start=ref_{callback.from_user.id}"
@@ -299,10 +303,10 @@ async def show_referral(callback: types.CallbackQuery, db: DatabaseService, bot:
     
     text = (
         f"🎁 <b>PROGRAM REFERRAL</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━</code>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━</code>\n\n"
         f"Ajak teman bergabung, dapatkan poin bersama!\n\n"
         f"💸 <b>Bonus yang didapat:</b>\n"
-        f"• Join Awal: <b>+1.000 Poin</b>\n"
+        f"• Join Awal: <b>+1.000 Poin</b> (masing-masing)\n"
         f"• Aktif 7 Hari: <b>+1.000 Poin</b>\n"
         f"• Aktif 14 Hari: <b>+1.000 Poin</b>\n"
         f"• Aktif 21 Hari: <b>+1.000 Poin</b>\n"
@@ -311,7 +315,8 @@ async def show_referral(callback: types.CallbackQuery, db: DatabaseService, bot:
         f"Total Diundang: {total_invited} Orang\n"
         f"Masih Bertahan: {active_users} Orang\n\n"
         f"👇 <b>Link Referral Kamu:</b>\n"
-        f"<code>{ref_link}</code>"
+        f"<code>{ref_link}</code>\n\n"
+        f"<i>Kirim link ini ke temanmu. Setiap teman yang bergabung dan aktif, kamu mendapat 1000 Poin!</i>"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali ke Dompet", callback_data="menu_finance")]])
