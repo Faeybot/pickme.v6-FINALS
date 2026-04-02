@@ -470,13 +470,45 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
     await state.clear()
     await callback.answer("✅ Minat disimpan!", show_alert=True)
     await render_full_profile_ui(bot, callback.message.chat.id, callback.from_user.id, db, None)
+
 # ==========================================
-# MANAJEMEN GALERI FOTO (TANPA FSM)
+# MANAJEMEN GALERI FOTO (TANPA FSM - PAKAI DICTIONARY)
 # ==========================================
 
-# Dictionary untuk menyimpan sementara user yang sedang upload
+# Dictionary untuk menyimpan user yang sedang upload
 waiting_for_photo = {}
 
+async def show_manage_photos_menu(message: types.Message, db: DatabaseService):
+    """Menampilkan menu manajemen foto"""
+    user = await db.get_user(message.from_user.id)
+    extra = user.extra_photos or []
+    
+    text = "📸 <b>MANAJEMEN GALERI FOTO</b>\n\nPilih aksi yang ingin Anda lakukan:"
+    
+    kb = []
+    kb.append([InlineKeyboardButton(text="🖼️ GANTI FOTO UTAMA", callback_data="change_photo_main")])
+    
+    if len(extra) < 2:
+        kb.append([InlineKeyboardButton(text="➕ TAMBAH FOTO EXTRA", callback_data="add_photo_extra")])
+    
+    if extra:
+        kb.append([InlineKeyboardButton(text="🗑️ HAPUS SEMUA FOTO EXTRA", callback_data="clear_photo_extra")])
+    
+    kb.append([InlineKeyboardButton(text="🔙 KEMBALI KE PROFIL", callback_data="menu_profile")])
+    
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "manage_photos")
+async def manage_photos_handler(callback: types.CallbackQuery, db: DatabaseService):
+    """Handler masuk ke menu manajemen foto"""
+    await show_manage_photos_menu(callback.message, db)
+    await callback.answer()
+
+
+# ==========================================
+# GANTI FOTO UTAMA
+# ==========================================
 @router.callback_query(F.data == "change_photo_main")
 async def start_change_main(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -493,16 +525,38 @@ async def start_change_main(callback: types.CallbackQuery):
     await callback.answer()
 
 
+# ==========================================
+# TAMBAH FOTO EXTRA
+# ==========================================
+@router.callback_query(F.data == "add_photo_extra")
+async def start_add_extra(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    
+    # Tandai user sedang menunggu upload foto extra
+    waiting_for_photo[user_id] = "extra"
+    
+    await callback.message.answer(
+        "📸 <b>TAMBAH FOTO EXTRA</b>\n\n"
+        "Silakan kirim foto tambahan (maksimal 2 foto).\n\n"
+        "<i>Kirim foto sekarang...</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# ==========================================
+# HANDLER UNTUK SEMUA FOTO YANG DIKIRIM
+# ==========================================
 @router.message(F.photo)
 async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bot):
-    """Handler untuk semua foto yang dikirim (tanpa FSM)"""
+    """Handler untuk semua foto yang dikirim"""
     user_id = message.from_user.id
     
     # Cek apakah user sedang dalam mode upload
     action = waiting_for_photo.get(user_id)
     
     if not action:
-        # Tidak ada aksi yang sedang berlangsung, abaikan
+        # Tidak ada aksi, abaikan
         return
     
     if action == "main":
@@ -516,7 +570,7 @@ async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bo
         extra = user.extra_photos or []
         
         if len(extra) >= 2:
-            await message.answer("⚠️ Maksimal 2 foto tambahan!", parse_mode="HTML")
+            await message.answer("⚠️ Maksimal 2 foto tambahan! Hapus beberapa foto terlebih dahulu.", parse_mode="HTML")
         else:
             await db.manage_extra_photo(user_id, message.photo[-1].file_id, action='add')
             await message.answer("✅ Foto tambahan berhasil disimpan!", parse_mode="HTML")
@@ -534,41 +588,12 @@ async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bo
     await show_manage_photos_menu(message, db)
 
 
-async def show_manage_photos_menu(message: types.Message, db: DatabaseService):
-    """Menampilkan menu manajemen foto"""
-    user = await db.get_user(message.from_user.id)
-    extra = user.extra_photos or []
-    
-    text = "📸 <b>MANAJEMEN GALERI FOTO</b>\n\nPilih aksi yang ingin Anda lakukan:"
-    
-    kb = [[InlineKeyboardButton(text="🖼️ GANTI FOTO UTAMA", callback_data="change_photo_main")]]
-    if len(extra) < 2:
-        kb.append([InlineKeyboardButton(text="➕ TAMBAH FOTO EXTRA", callback_data="add_photo_extra")])
-    if extra:
-        kb.append([InlineKeyboardButton(text="🗑️ HAPUS SEMUA FOTO EXTRA", callback_data="clear_photo_extra")])
-    kb.append([InlineKeyboardButton(text="🔙 KEMBALI KE PROFIL", callback_data="menu_profile")])
-    
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
-
-
-@router.callback_query(F.data == "add_photo_extra")
-async def start_add_extra(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    
-    # Tandai user sedang menunggu upload foto extra
-    waiting_for_photo[user_id] = "extra"
-    
-    await callback.message.answer(
-        "📸 <b>TAMBAH FOTO EXTRA</b>\n\n"
-        "Silakan kirim foto tambahan (maksimal 2 foto).\n\n"
-        "<i>Kirim foto sekarang...</i>",
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
+# ==========================================
+# HAPUS SEMUA FOTO EXTRA
+# ==========================================
 @router.callback_query(F.data == "clear_photo_extra")
 async def clear_photos(callback: types.CallbackQuery, db: DatabaseService):
+    """Hapus semua foto extra"""
     async with db.session_factory() as session:
         from services.database import User as UserTable
         user = await session.get(UserTable, callback.from_user.id)
@@ -578,9 +603,3 @@ async def clear_photos(callback: types.CallbackQuery, db: DatabaseService):
     
     await callback.answer("🗑️ Semua foto extra dihapus!", show_alert=True)
     await show_manage_photos_menu(callback.message, db)
-
-
-@router.callback_query(F.data == "manage_photos")
-async def manage_photos_handler(callback: types.CallbackQuery, db: DatabaseService):
-    await show_manage_photos_menu(callback.message, db)
-    await callback.answer()
