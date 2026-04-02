@@ -717,22 +717,12 @@ async def handle_gallery_upload(message: types.Message, db: DatabaseService, bot
 
 
 # ==========================================
-# HAPUS SEMUA FOTO ALBUM
-# ==========================================
-@router.callback_query(F.data == "gallery_clear_all")
-async def clear_all_album(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    """Menghapus semua foto album"""
-    user_id = callback.from_user.id
-    chat_id = callback.message.chat.id
+@router.message()
+async def catch_all_messages(message: types.Message):
+    """Menangkap SEMUA pesan (termasuk foto)"""
+    import logging
+    logging.error(f"🔥 PESAN DITERIMA: {message.content_type}")
     
-    async with db.session_factory() as session:
-        from services.database import User as UserTable
-        user = await session.get(UserTable, user_id)
-        if user:
-            user.extra_photos = []
-            await session.commit()
-    
-    await callback.answer("🗑️ Semua foto album dihapus!", show_alert=True)
-    
-    # Refresh galeri
-    await render_gallery_ui(bot, chat_id, user_id, db, callback.message.message_id)
+    if message.photo:
+        logging.error(f"🔥 INI FOTO! User: {message.from_user.id}")
+        await message.answer("✅ Bot menerima foto! (test)", parse_mode="HTML")
