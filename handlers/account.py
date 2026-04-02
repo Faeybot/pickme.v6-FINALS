@@ -472,7 +472,7 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
     await render_full_profile_ui(bot, callback.message.chat.id, callback.from_user.id, db, None)
 
 # ==========================================
-# GALERI FOTO & MANAJEMEN (VERSI BARU)
+# 10. GALERI FOTO & MANAJEMEN (VERSI FINAL DENGAN LOGGING)
 # ==========================================
 
 # Dictionary untuk menyimpan user yang sedang upload
@@ -564,15 +564,16 @@ async def change_main_photo(callback: types.CallbackQuery):
 
 
 # ==========================================
-# UPLOAD FOTO ALBUM 1 (jika kosong)
+# UPLOAD/GANTI FOTO ALBUM 1
 # ==========================================
 @router.callback_query(F.data == "gallery_upload_extra_1")
-async def upload_extra_1(callback: types.CallbackQuery):
+@router.callback_query(F.data == "gallery_change_extra_1")
+async def handle_extra_1(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     waiting_for_upload[user_id] = "extra_1"
     
     await callback.message.answer(
-        "📸 <b>UPLOAD FOTO ALBUM 1</b>\n\n"
+        "📸 <b>FOTO ALBUM 1</b>\n\n"
         "Silakan kirim foto untuk album 1.\n\n"
         "<i>Kirim foto sekarang...</i>",
         parse_mode="HTML"
@@ -581,32 +582,16 @@ async def upload_extra_1(callback: types.CallbackQuery):
 
 
 # ==========================================
-# GANTI FOTO ALBUM 1 (jika sudah ada)
-# ==========================================
-@router.callback_query(F.data == "gallery_change_extra_1")
-async def change_extra_1(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    waiting_for_upload[user_id] = "extra_1"
-    
-    await callback.message.answer(
-        "📸 <b>GANTI FOTO ALBUM 1</b>\n\n"
-        "Silakan kirim foto baru untuk mengganti album 1.\n\n"
-        "<i>Kirim foto sekarang...</i>",
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-# ==========================================
-# UPLOAD FOTO ALBUM 2 (jika kosong)
+# UPLOAD/GANTI FOTO ALBUM 2
 # ==========================================
 @router.callback_query(F.data == "gallery_upload_extra_2")
-async def upload_extra_2(callback: types.CallbackQuery):
+@router.callback_query(F.data == "gallery_change_extra_2")
+async def handle_extra_2(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     waiting_for_upload[user_id] = "extra_2"
     
     await callback.message.answer(
-        "📸 <b>UPLOAD FOTO ALBUM 2</b>\n\n"
+        "📸 <b>FOTO ALBUM 2</b>\n\n"
         "Silakan kirim foto untuk album 2.\n\n"
         "<i>Kirim foto sekarang...</i>",
         parse_mode="HTML"
@@ -615,99 +600,120 @@ async def upload_extra_2(callback: types.CallbackQuery):
 
 
 # ==========================================
-# GANTI FOTO ALBUM 2 (jika sudah ada)
-# ==========================================
-@router.callback_query(F.data == "gallery_change_extra_2")
-async def change_extra_2(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    waiting_for_upload[user_id] = "extra_2"
-    
-    await callback.message.answer(
-        "📸 <b>GANTI FOTO ALBUM 2</b>\n\n"
-        "Silakan kirim foto baru untuk mengganti album 2.\n\n"
-        "<i>Kirim foto sekarang...</i>",
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-# ==========================================
-# HANDLER UNTUK SEMUA FOTO YANG DIKIRIM
+# HANDLER UNTUK SEMUA FOTO YANG DIKIRIM (DENGAN LOGGING)
 # ==========================================
 @router.message(F.photo)
 async def handle_gallery_upload(message: types.Message, db: DatabaseService, bot: Bot):
     """Menangani semua upload foto dari galeri"""
+    
+    logging.info("=" * 50)
+    logging.info("📸 STEP 1: Handler foto dipanggil")
+    
     user_id = message.from_user.id
     action = waiting_for_upload.get(user_id)
     
+    logging.info(f"📸 STEP 2: User ID: {user_id}, Action: {action}")
+    
     if not action:
-        # Tidak ada session upload, abaikan
+        logging.info("📸 STEP 3: Tidak ada action, foto diabaikan")
         return
     
     photo_id = message.photo[-1].file_id
+    logging.info(f"📸 STEP 4: Photo ID diterima: {photo_id[:50]}...")
     
-    if action == "main":
-        # Ganti foto profil
-        await db.update_main_photo(user_id, photo_id)
-        await message.answer("✅ <b>Foto profil berhasil diperbarui!</b>", parse_mode="HTML")
+    try:
+        if action == "main":
+            logging.info("📸 STEP 5: Memanggil update_main_photo...")
+            
+            # Update foto utama
+            async with db.session_factory() as session:
+                from services.database import User as UserTable
+                user = await session.get(UserTable, user_id)
+                if user:
+                    user.photo_id = photo_id
+                    await session.commit()
+                    logging.info(f"📸 STEP 6: update_main_photo BERHASIL")
+                else:
+                    logging.error(f"📸 STEP 6: User tidak ditemukan!")
+                    await message.answer("❌ Gagal menyimpan foto! User tidak ditemukan.", parse_mode="HTML")
+                    return
+            
+            # Verifikasi
+            user = await db.get_user(user_id)
+            logging.info(f"📸 STEP 7: Photo ID di database: {user.photo_id[:50] if user.photo_id else 'None'}...")
+            
+            await message.answer("✅ Foto profil berhasil diperbarui!", parse_mode="HTML")
+            
+        elif action == "extra_1":
+            logging.info("📸 STEP 5: Memproses extra_1...")
+            
+            async with db.session_factory() as session:
+                from services.database import User as UserTable
+                user = await session.get(UserTable, user_id)
+                if user:
+                    extra = list(user.extra_photos or [])
+                    
+                    if len(extra) >= 1:
+                        extra[0] = photo_id
+                    else:
+                        extra.append(photo_id)
+                    
+                    user.extra_photos = extra
+                    await session.commit()
+                    logging.info(f"📸 STEP 6: Extra photos sekarang: {extra}")
+            
+            await message.answer("✅ Foto album 1 berhasil diperbarui!", parse_mode="HTML")
+            
+        elif action == "extra_2":
+            logging.info("📸 STEP 5: Memproses extra_2...")
+            
+            async with db.session_factory() as session:
+                from services.database import User as UserTable
+                user = await session.get(UserTable, user_id)
+                if user:
+                    extra = list(user.extra_photos or [])
+                    
+                    # Pastikan album 1 ada jika album 2 diisi
+                    if len(extra) < 1:
+                        extra.append(None)
+                    
+                    if len(extra) >= 2:
+                        extra[1] = photo_id
+                    else:
+                        extra.append(photo_id)
+                    
+                    # Bersihkan None
+                    extra = [x for x in extra if x is not None]
+                    
+                    user.extra_photos = extra
+                    await session.commit()
+                    logging.info(f"📸 STEP 6: Extra photos sekarang: {extra}")
+            
+            await message.answer("✅ Foto album 2 berhasil diperbarui!", parse_mode="HTML")
         
-    elif action == "extra_1":
-        # Upload/ganti album 1
-        user = await db.get_user(user_id)
-        extra = list(user.extra_photos or [])
+        logging.info("📸 STEP 8: Sukses! Pesan terkirim")
         
-        if len(extra) >= 1:
-            # Ganti yang sudah ada
-            extra[0] = photo_id
-        else:
-            # Tambah baru
-            extra.append(photo_id)
-        
-        async with db.session_factory() as session:
-            u = await session.get(User, user_id)
-            u.extra_photos = extra
-            await session.commit()
-        
-        await message.answer("✅ <b>Foto album 1 berhasil diperbarui!</b>", parse_mode="HTML")
-        
-    elif action == "extra_2":
-        # Upload/ganti album 2
-        user = await db.get_user(user_id)
-        extra = list(user.extra_photos or [])
-        
-        if len(extra) >= 2:
-            # Ganti yang sudah ada
-            extra[1] = photo_id
-        else:
-            # Tambah baru (mungkin album 1 belum ada)
-            while len(extra) < 1:
-                extra.append(None)
-            extra.append(photo_id)
-        
-        # Bersihkan None
-        extra = [x for x in extra if x is not None]
-        
-        async with db.session_factory() as session:
-            u = await session.get(User, user_id)
-            u.extra_photos = extra
-            await session.commit()
-        
-        await message.answer("✅ <b>Foto album 2 berhasil diperbarui!</b>", parse_mode="HTML")
+    except Exception as e:
+        logging.error(f"📸 ERROR: {e}")
+        await message.answer(f"❌ Gagal menyimpan foto! Error: {str(e)[:100]}", parse_mode="HTML")
     
     # Hapus session upload
     waiting_for_upload.pop(user_id, None)
     
-    # Hapus pesan user (biar chat bersih)
+    # Hapus pesan user
     try:
         await message.delete()
     except:
         pass
     
-    # Tunggu 1.5 detik agar user membaca pesan sukses
+    # Tunggu sebentar agar user membaca pesan sukses
     await asyncio.sleep(1.5)
     
     # Kembali ke galeri foto
     await render_gallery_ui(bot, message.chat.id, user_id, db)
+    
+    logging.info("📸 STEP 9: Selesai")
+    logging.info("=" * 50)
 
 
 # ==========================================
@@ -729,4 +735,4 @@ async def clear_all_album(callback: types.CallbackQuery, db: DatabaseService, bo
     await callback.answer("🗑️ Semua foto album dihapus!", show_alert=True)
     
     # Refresh galeri
-    await render_gallery_ui(bot, chat_id, user_id, db, callback.message.message_id)
+    await render_gallery_ui(bot, chat_id, user_id, db, callback.message.message_id
