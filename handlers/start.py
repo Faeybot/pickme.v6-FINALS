@@ -27,8 +27,11 @@ async def cleanup_chat_history(chat_id: int, user_id: int, bot: Bot, db: Databas
     if user.anchor_msg_id:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=user.anchor_msg_id)
-        except:
-            pass
+            logging.info(f"✅ Anchor message deleted for user {user_id}")
+        except Exception as e:
+            logging.warning(f"Failed to delete anchor message for user {user_id}: {e}")
+        
+        # Reset anchor di database
         await db.update_anchor_msg(user_id, None)
     
     # Hapus ReplyKeyboard jika ada
@@ -40,19 +43,66 @@ async def cleanup_chat_history(chat_id: int, user_id: int, bot: Bot, db: Databas
 
 
 # ==========================================
-# 2. CORE UI RENDERER (DASHBOARD UTAMA)
+# 2. NOTIFICATION HUB
+# ==========================================
+async def render_notification_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, callback_id: str = None):
+    """Menampilkan pusat notifikasi"""
+    from aiogram.types import InputMediaPhoto
+    
+    user = await db.get_user(user_id)
+    if not user:
+        return
+    
+    await db.push_nav(user_id, "notifications")
+    
+    unreads = await db.get_all_unread_counts(user_id)
+    
+    text = (
+        "🔔 <b>PUSAT NOTIFIKASI</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+        "Pantau semua interaksi profilmu di sini.\n"
+        "Jangan biarkan pesan atau match barumu menunggu terlalu lama!"
+    )
+    
+    kb = UIManager.get_notification_center_kb(unreads)
+    
+    photo_to_use = user.photo_id if user.photo_id else BANNER_PHOTO_ID
+    media = InputMediaPhoto(media=photo_to_use, caption=text, parse_mode="HTML")
+    
+    # Hapus anchor lama jika ada
+    if user.anchor_msg_id:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=user.anchor_msg_id)
+        except:
+            pass
+        await db.update_anchor_msg(user_id, None)
+    
+    # Kirim pesan baru
+    sent = await bot.send_photo(chat_id=chat_id, photo=photo_to_use, caption=text, reply_markup=kb, parse_mode="HTML")
+    await db.update_anchor_msg(user_id, sent.message_id)
+    
+    if callback_id:
+        try:
+            await bot.answer_callback_query(callback_id)
+        except:
+            pass
+
+
+# ==========================================
+# 3. CORE UI RENDERER (DASHBOARD UTAMA)
 # ==========================================
 async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None, force_new: bool = False):
     """Menampilkan dashboard utama dengan navigasi inline - AUTO RESET & CLEANUP"""
     
-    # Force reset FSM
+    # ========== 🔥 FORCE RESET FSM ==========
     if state:
         try:
             await state.clear()
-        except:
-            pass
+            logging.info(f"✅ FSM cleared for user {user_id}")
+        except Exception as e:
+            logging.error(f"Failed to clear FSM: {e}")
     
-    # Bersihkan layar
+    # ========== 🔥 BERSIHKAN LAYAR & HAPUS ANCHOR LAMA ==========
     await cleanup_chat_history(chat_id, user_id, bot, db)
     
     user = await db.get_user(user_id)
@@ -83,10 +133,10 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
     
     inline_kb = UIManager.get_dashboard_inline_kb(total_notif)
     
+    # Gunakan foto profil user jika ada, fallback ke banner default
     photo_to_use = user.photo_id if user.photo_id else BANNER_PHOTO_ID
-    media = InputMediaPhoto(media=photo_to_use, caption=dashboard_text, parse_mode="HTML")
     
-    # Kirim pesan baru (layar sudah bersih)
+    # Kirim pesan baru (layar sudah bersih, anchor sudah dihapus)
     sent_message = await bot.send_photo(chat_id=chat_id, photo=photo_to_use, caption=dashboard_text, reply_markup=inline_kb, parse_mode="HTML")
     await db.update_anchor_msg(user_id, sent_message.message_id)
     
@@ -100,7 +150,7 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
 
 
 # ==========================================
-# 3. HANDLERS UTAMA (/start & Command)
+# 4. HANDLERS UTAMA (/start, /dashboard, tombol Dashboard)
 # ==========================================
 @router.message(CommandStart())
 @router.message(Command("dashboard"))
@@ -111,13 +161,15 @@ async def command_start_handler(message: types.Message, command: CommandObject =
     user_id = message.from_user.id 
     chat_id = message.chat.id
 
-    # Force reset FSM
+    # ========== 🔥 FORCE RESET FSM ==========
     if state:
         try:
             await state.clear()
-        except:
-            pass
+            logging.info(f"✅ FSM cleared for user {user_id} on /start")
+        except Exception as e:
+            logging.error(f"Failed to clear FSM: {e}")
 
+    # Hapus pesan perintah user
     try:
         await message.delete()
     except:
@@ -152,46 +204,9 @@ async def command_start_handler(message: types.Message, command: CommandObject =
 
     await render_dashboard_ui(bot, chat_id, user_id, db, state, force_new=True)
 
-# ==========================================
-# NOTIFICATION HUB (LANGSUNG DI START.PY)
-# ==========================================
-async def render_notification_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, callback_id: str = None):
-    """Menampilkan pusat notifikasi"""
-    from utils.ui_manager import UIManager
-    from aiogram.types import InputMediaPhoto
-    
-    user = await db.get_user(user_id)
-    if not user:
-        return
-    
-    await db.push_nav(user_id, "notifications")
-    
-    unreads = await db.get_all_unread_counts(user_id)
-    
-    text = (
-        "🔔 <b>PUSAT NOTIFIKASI</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-        "Pantau semua interaksi profilmu di sini.\n"
-        "Jangan biarkan pesan atau match barumu menunggu terlalu lama!"
-    )
-    
-    kb = UIManager.get_notification_center_kb(unreads)
-    
-    photo_to_use = user.photo_id if user.photo_id else BANNER_PHOTO_ID
-    media = InputMediaPhoto(media=photo_to_use, caption=text, parse_mode="HTML")
-    
-    if callback_id:
-        try:
-            await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
-            await bot.answer_callback_query(callback_id)
-        except:
-            pass
-    else:
-        sent = await bot.send_photo(chat_id=chat_id, photo=photo_to_use, caption=text, reply_markup=kb, parse_mode="HTML")
-        await db.update_anchor_msg(user_id, sent.message_id)
 
 # ==========================================
-# 4. GERBANG KE MODUL LAIN (CALLBACK ROUTER)
+# 5. HANDLER: VERIFIKASI JOIN (IRON GATE)
 # ==========================================
 @router.callback_query(F.data == "check_join_start")
 async def verify_join_start(callback: types.CallbackQuery, bot: Bot, db: DatabaseService, state: FSMContext):
@@ -206,14 +221,33 @@ async def verify_join_start(callback: types.CallbackQuery, bot: Bot, db: Databas
         await callback.answer("❌ Kamu belum join Channel/Grup!", show_alert=True)
 
 
+# ==========================================
+# 6. HANDLER: KEMBALI KE DASHBOARD (DARI MANAPUN)
+# ==========================================
 @router.callback_query(F.data == "back_to_dashboard")
 async def back_to_dashboard_callback(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    """Kembali ke dashboard - DENGAN RESET FSM & CLEANUP TOTAL"""
+    
+    # ========== 🔥 FORCE RESET FSM ==========
+    if state:
+        try:
+            await state.clear()
+            logging.info(f"✅ FSM cleared for user {callback.from_user.id} on back_to_dashboard")
+        except Exception as e:
+            logging.error(f"Failed to clear FSM: {e}")
+    
     await render_dashboard_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
 
+# ==========================================
+# 7. GERBANG KE MODUL LAIN
+# ==========================================
 @router.callback_query(F.data == "menu_account")
 async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
     """GERBANG: Arahkan ke Account Hub di account.py"""
+    # Reset FSM sebelum pindah
+    if state:
+        await state.clear()
     from handlers.account import render_account_hub
     await render_account_hub(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
@@ -221,6 +255,8 @@ async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bo
 @router.callback_query(F.data == "menu_finance")
 async def cb_menu_finance(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
     """GERBANG: Arahkan ke Wallet Hub di wallet.py"""
+    if state:
+        await state.clear()
     from handlers.wallet import render_wallet_hub
     await render_wallet_hub(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
@@ -228,13 +264,14 @@ async def cb_menu_finance(callback: types.CallbackQuery, db: DatabaseService, bo
 @router.callback_query(F.data == "menu_notifications")
 async def cb_menu_notifications(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     """GERBANG: Arahkan ke Notification Hub"""
-    from handlers.notification import render_notification_hub
     await render_notification_hub(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
 
 
 @router.callback_query(F.data == "menu_feed")
 async def cb_menu_feed(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
     """GERBANG: Arahkan ke Feed Menu"""
+    if state:
+        await state.clear()
     from handlers.feed import render_feed_ui
     await render_feed_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
@@ -242,6 +279,8 @@ async def cb_menu_feed(callback: types.CallbackQuery, db: DatabaseService, bot: 
 @router.callback_query(F.data == "menu_discovery")
 async def cb_menu_discovery(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
     """GERBANG: Arahkan ke Discovery Menu"""
+    if state:
+        await state.clear()
     from handlers.discovery import render_discovery_ui
     await render_discovery_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
@@ -254,7 +293,7 @@ async def cb_menu_pricing(callback: types.CallbackQuery, db: DatabaseService, bo
 
 
 # ==========================================
-# 5. COMMAND VIA TELEGRAM MENU BIRU
+# 8. COMMAND VIA TELEGRAM MENU BIRU
 # ==========================================
 @router.message(Command("notifikasi"))
 async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
@@ -262,7 +301,6 @@ async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
         await message.delete()
     except:
         pass
-    from handlers.notification import render_notification_hub
     await render_notification_hub(bot, message.chat.id, message.from_user.id, db)
 
 
@@ -272,6 +310,8 @@ async def cmd_wallet(message: types.Message, db: DatabaseService, bot: Bot, stat
         await message.delete()
     except:
         pass
+    if state:
+        await state.clear()
     from handlers.wallet import render_wallet_hub
     await render_wallet_hub(bot, message.chat.id, message.from_user.id, db, state)
 
@@ -282,12 +322,14 @@ async def cmd_account(message: types.Message, db: DatabaseService, bot: Bot, sta
         await message.delete()
     except:
         pass
+    if state:
+        await state.clear()
     from handlers.account import render_account_hub
     await render_account_hub(bot, message.chat.id, message.from_user.id, db, state)
 
 
 # ==========================================
-# 6. HANDLER UNTUK CALLBACK YANG TIDAK DIKENAL (DEBUG)
+# 9. HANDLER UNTUK CALLBACK YANG TIDAK DIKENAL (DEBUG)
 # ==========================================
 @router.callback_query()
 async def handle_unknown_callback(callback: types.CallbackQuery):
