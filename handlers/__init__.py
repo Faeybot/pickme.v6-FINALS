@@ -2,6 +2,7 @@ from . import (
     start,
     registration,
     account,
+    status,
     discovery,
     feed,
     preview,
