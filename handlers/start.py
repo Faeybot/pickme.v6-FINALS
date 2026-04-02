@@ -152,6 +152,43 @@ async def command_start_handler(message: types.Message, command: CommandObject =
 
     await render_dashboard_ui(bot, chat_id, user_id, db, state, force_new=True)
 
+# ==========================================
+# NOTIFICATION HUB (LANGSUNG DI START.PY)
+# ==========================================
+async def render_notification_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, callback_id: str = None):
+    """Menampilkan pusat notifikasi"""
+    from utils.ui_manager import UIManager
+    from aiogram.types import InputMediaPhoto
+    
+    user = await db.get_user(user_id)
+    if not user:
+        return
+    
+    await db.push_nav(user_id, "notifications")
+    
+    unreads = await db.get_all_unread_counts(user_id)
+    
+    text = (
+        "🔔 <b>PUSAT NOTIFIKASI</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
+        "Pantau semua interaksi profilmu di sini.\n"
+        "Jangan biarkan pesan atau match barumu menunggu terlalu lama!"
+    )
+    
+    kb = UIManager.get_notification_center_kb(unreads)
+    
+    photo_to_use = user.photo_id if user.photo_id else BANNER_PHOTO_ID
+    media = InputMediaPhoto(media=photo_to_use, caption=text, parse_mode="HTML")
+    
+    if callback_id:
+        try:
+            await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
+            await bot.answer_callback_query(callback_id)
+        except:
+            pass
+    else:
+        sent = await bot.send_photo(chat_id=chat_id, photo=photo_to_use, caption=text, reply_markup=kb, parse_mode="HTML")
+        await db.update_anchor_msg(user_id, sent.message_id)
 
 # ==========================================
 # 4. GERBANG KE MODUL LAIN (CALLBACK ROUTER)
