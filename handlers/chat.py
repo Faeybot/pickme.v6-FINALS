@@ -1,11 +1,13 @@
 import os
 import html
+import datetime
+import logging
 import asyncio
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    InlineKeyboardButton, InlineKeyboardMarkup, 
+    InlineKeyboardButton, InlineKeyboardMarkup,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     InputMediaPhoto
 )
@@ -21,10 +23,10 @@ class ChatState(StatesGroup):
 
 
 # ==========================================
-# HELPER: Render History Text
+# 1. HELPER: RENDER HISTORY TEXT
 # ==========================================
 def render_history_text(history_list, limit=15):
-    """Render history chat dari database"""
+    """Render history chat dari database menjadi teks HTML"""
     if not history_list:
         return "<i>(Belum ada percakapan. Kirim pesan pertama!)</i>"
     
@@ -39,27 +41,27 @@ def render_history_text(history_list, limit=15):
 
 
 # ==========================================
-# 1. MASUK KE RUANG OBROLAN
+# 2. FUNGSI UTAMA: START CHAT ROOM
 # ==========================================
 async def start_chat_room(
-    bot: Bot, 
-    chat_id: int, 
-    user_id: int, 
-    target_id: int, 
-    db: DatabaseService, 
-    state: FSMContext, 
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    target_id: int,
+    db: DatabaseService,
+    state: FSMContext,
     message_id: int = None
 ):
-    """Memulai room chat dengan UI khusus"""
+    """Memulai ruang obrolan dengan tampilan history"""
     
     target = await db.get_user(target_id)
     chat_sess = await db.get_active_chat_session(user_id, target_id)
     
     if not target or not chat_sess:
-        return await bot.send_message(chat_id, "❌ Sesi obrolan tidak ditemukan atau sudah berakhir.")
-
-    # ========== CLEANUP: Hapus semua pesan sebelumnya ==========
-    # Hapus pesan yang dikirim sebelumnya (anchor message)
+        await bot.send_message(chat_id, "❌ Sesi obrolan tidak ditemukan atau sudah berakhir.")
+        return
+    
+    # ========== CLEANUP: Hapus pesan sebelumnya ==========
     if message_id:
         try:
             await bot.delete_message(chat_id, message_id)
@@ -90,7 +92,6 @@ async def start_chat_room(
         kasta = "👤 FREE"
     
     # Hitung sisa waktu
-    import datetime
     now_ts = int(datetime.datetime.now().timestamp())
     if chat_sess.expires_at > now_ts:
         diff = chat_sess.expires_at - now_ts
@@ -111,20 +112,20 @@ async def start_chat_room(
         f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
         f"✍️ <i>Ketik pesanmu di bawah...</i>"
     )
-
+    
     # Tombol Inline untuk load history
     kb_inline = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Muat Lebih Banyak", callback_data=f"chat_loadmore_{target_id}_20")],
-        [InlineKeyboardButton(text="⬇️ Ke Pesan Terbaru", callback_data=f"chat_loadmore_{target_id}_10")]
+        [InlineKeyboardButton(text="🔄 Muat Lebih Banyak", callback_data=f"chat_load_{target_id}_20")],
+        [InlineKeyboardButton(text="⬇️ Ke Pesan Terbaru", callback_data=f"chat_load_{target_id}_10")]
     ])
-
+    
     # ========== REPLYKEYBOARD untuk Exit ==========
     kb_exit = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🛑 AKHIRI OBROLAN")]],
         resize_keyboard=True,
         one_time_keyboard=False
     )
-
+    
     # Kirim Header (Foto Profil + Caption)
     sent_header = await bot.send_photo(
         chat_id=chat_id,
@@ -154,23 +155,160 @@ async def start_chat_room(
 
 
 # ==========================================
-# 2. LOAD MORE HISTORY (Inline Button)
+# 3. HANDLER: MULAI CHAT DARI CALLBACK (PINTU MASUK UTAMA)
 # ==========================================
-@router.callback_query(F.data.startswith("chat_loadmore_"))
+@router.callback_query(F.data.startswith("chat_"))
+async def start_chat_from_callback(
+    callback: types.CallbackQuery,
+    db: DatabaseService,
+    bot: Bot,
+    state: FSMContext
+):
+    """Memulai chat dari tombol Kirim Pesan di berbagai tempat:
+    - discovery: chat_{target_id}_discovery
+    - preview: chat_{target_id}_public
+    - unmask: chat_{target_id}_unmask
+    - match: chat_{target_id}_match
+    - inbox: chat_{target_id}_inbox
+    - feed: chat_{target_id}_feed
+    """
+    parts = callback.data.split("_")
+    
+    # Format: chat_{target_id}_{origin}
+    if len(parts) >= 3:
+        target_id = int(parts[1])
+        origin = parts[2]  # discovery, public, unmask, match, inbox, feed
+    else:
+        target_id = int(parts[1])
+        origin = "public"
+    
+    user_id = callback.from_user.id
+    target = await db.get_user(target_id)
+    
+    if not target:
+        await callback.answer("❌ Profil tidak ditemukan!", show_alert=True)
+        return
+    
+    # Cek apakah sesi chat sudah ada
+    chat_sess = await db.get_active_chat_session(user_id, target_id)
+    now_ts = int(datetime.datetime.now().timestamp())
+    
+    if not chat_sess or chat_sess.expires_at <= now_ts:
+        # Belum ada sesi, perlu buat baru
+        user = await db.get_user(user_id)
+        
+        # ========== ORIGIN: DISCOVERY ==========
+        if origin == "discovery":
+            # Cek apakah user VIP/VIP+
+            if not (user.is_vip or user.is_vip_plus):
+                await callback.answer("🔒 Fitur Kirim Pesan hanya untuk VIP/VIP+!\nUpgrade dulu ya!", show_alert=True)
+                return
+            
+            # Cek kuota
+            if user.daily_message_quota <= 0 and user.extra_message_quota <= 0:
+                await callback.answer("❌ Kuota DM habis! Upgrade atau tunggu reset besok.", show_alert=True)
+                return
+            
+            # Potong kuota
+            success = await db.use_message_quota(user_id)
+            if not success:
+                await callback.answer("❌ Gagal memotong kuota!", show_alert=True)
+                return
+            
+            # Tentukan durasi (24 jam untuk VIP, 48 jam untuk VIP+)
+            duration_hrs = 48 if user.is_vip_plus else 24
+            expires_at = int((datetime.datetime.now() + datetime.timedelta(hours=duration_hrs)).timestamp())
+            
+            await db.upsert_chat_session(user_id, target_id, expires_at, origin="public")
+        
+        # ========== ORIGIN: PUBLIC (dari preview/feed) ==========
+        elif origin == "public" or origin == "feed":
+            # Cek apakah user VIP/VIP+
+            if not (user.is_vip or user.is_vip_plus):
+                await callback.answer("🔒 Fitur Kirim Pesan hanya untuk VIP/VIP+!\nUpgrade dulu ya!", show_alert=True)
+                return
+            
+            # Cek kuota
+            if user.daily_message_quota <= 0 and user.extra_message_quota <= 0:
+                await callback.answer("❌ Kuota DM habis! Upgrade atau tunggu reset besok.", show_alert=True)
+                return
+            
+            # Potong kuota
+            success = await db.use_message_quota(user_id)
+            if not success:
+                await callback.answer("❌ Gagal memotong kuota!", show_alert=True)
+                return
+            
+            # Tentukan durasi
+            duration_hrs = 48 if user.is_vip_plus else 24
+            expires_at = int((datetime.datetime.now() + datetime.timedelta(hours=duration_hrs)).timestamp())
+            
+            await db.upsert_chat_session(user_id, target_id, expires_at, origin="public")
+        
+        # ========== ORIGIN: UNMASK ==========
+        elif origin == "unmask":
+            # Unmask: sudah punya sesi dari proses unmask
+            if not chat_sess:
+                await callback.answer("❌ Sesi unmask tidak ditemukan! Silakan unmask ulang.", show_alert=True)
+                return
+        
+        # ========== ORIGIN: MATCH ==========
+        elif origin == "match":
+            # Match: gratis, buat sesi 24 jam
+            expires_at = int((datetime.datetime.now() + datetime.timedelta(hours=24)).timestamp())
+            await db.upsert_chat_session(user_id, target_id, expires_at, origin="match")
+        
+        # ========== ORIGIN: INBOX (balas pesan) ==========
+        elif origin == "inbox":
+            # Inbox: sesi mungkin sudah ada, jika tidak ada buat baru dengan potong kuota
+            if not chat_sess:
+                if user.daily_message_quota <= 0 and user.extra_message_quota <= 0:
+                    await callback.answer("❌ Kuota DM habis! Upgrade atau tunggu reset besok.", show_alert=True)
+                    return
+                
+                success = await db.use_message_quota(user_id)
+                if not success:
+                    await callback.answer("❌ Gagal memotong kuota!", show_alert=True)
+                    return
+                
+                duration_hrs = 48 if user.is_vip_plus else 24
+                expires_at = int((datetime.datetime.now() + datetime.timedelta(hours=duration_hrs)).timestamp())
+                await db.upsert_chat_session(user_id, target_id, expires_at, origin="public")
+    
+    # Tandai notifikasi sebagai dibaca (jika ada)
+    await db.mark_notif_read(user_id, target_id, "CHAT")
+    
+    await callback.answer("⏳ Membuka ruang obrolan...")
+    
+    # Panggil fungsi start_chat_room
+    await start_chat_room(
+        bot,
+        callback.message.chat.id,
+        user_id,
+        target_id,
+        db,
+        state,
+        callback.message.message_id
+    )
+
+
+# ==========================================
+# 4. HANDLER: LOAD MORE HISTORY
+# ==========================================
+@router.callback_query(F.data.startswith("chat_load_"))
 async def handle_load_history(callback: types.CallbackQuery, db: DatabaseService):
+    """Memuat lebih banyak history chat"""
     parts = callback.data.split("_")
     target_id = int(parts[2])
     limit = int(parts[3])
     user_id = callback.from_user.id
     
-    # Ambil history dari database
     history = await db.get_chat_history(user_id, target_id, limit=limit)
     history_text = render_history_text(history, limit=limit)
     
     # Edit caption header
     try:
         current_caption = callback.message.caption
-        # Cari dan ganti bagian riwayat
         import re
         pattern = r'<b>\[Riwayat Terakhir\]</b>\n.*?\n<code>━━━━━━━━━━━━━━━━━━━━━━</code>'
         replacement = f'<b>[Riwayat Terakhir]</b>\n{history_text}\n<code>━━━━━━━━━━━━━━━━━━━━━━</code>'
@@ -187,10 +325,16 @@ async def handle_load_history(callback: types.CallbackQuery, db: DatabaseService
 
 
 # ==========================================
-# 3. PROSES KIRIM PESAN
+# 5. HANDLER: PROSES PESAN DI RUANG CHAT
 # ==========================================
 @router.message(ChatState.in_room, F.text != "🛑 AKHIRI OBROLAN")
-async def process_chat_relay(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+async def process_chat_relay(
+    message: types.Message,
+    state: FSMContext,
+    db: DatabaseService,
+    bot: Bot
+):
+    """Memproses pesan yang dikirim di ruang chat"""
     data = await state.get_data()
     target_id = data.get('current_target_id')
     user = await db.get_user(message.from_user.id)
@@ -242,7 +386,7 @@ async def process_chat_relay(message: types.Message, state: FSMContext, db: Data
     sweep_list.append(sent_bubble.message_id)
     await state.update_data(sweep_list=sweep_list)
     
-    # Log ke channel admin (opsional)
+    # ========== LOG KE CHANNEL ADMIN (OPSIONAL) ==========
     chat_sess = await db.get_active_chat_session(user.id, target_id)
     if chat_sess and chat_sess.thread_id:
         try:
@@ -253,10 +397,16 @@ async def process_chat_relay(message: types.Message, state: FSMContext, db: Data
 
 
 # ==========================================
-# 4. EXIT CHAT ROOM (CLEANUP TOTAL)
+# 6. HANDLER: EXIT CHAT ROOM (CLEANUP TOTAL)
 # ==========================================
 @router.message(F.text == "🛑 AKHIRI OBROLAN", ChatState.in_room)
-async def exit_chat_room(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+async def exit_chat_room(
+    message: types.Message,
+    state: FSMContext,
+    db: DatabaseService,
+    bot: Bot
+):
+    """Keluar dari ruang obrolan dan bersihkan semua pesan"""
     user_id = message.from_user.id
     chat_id = message.chat.id
     
@@ -295,7 +445,6 @@ async def exit_chat_room(message: types.Message, state: FSMContext, db: Database
     
     # ========== HAPUS REPLYKEYBOARD YANG NYANGKUT ==========
     try:
-        # Kirim pesan kosong dengan ReplyKeyboardRemove
         temp_msg = await bot.send_message(
             chat_id,
             "🔄",
@@ -313,10 +462,15 @@ async def exit_chat_room(message: types.Message, state: FSMContext, db: Database
 
 
 # ==========================================
-# 5. HANDLER UNTUK MENU LAIN SAAT DI CHAT ROOM
+# 7. HANDLER: KELUAR KE DASHBOARD SAAT DI CHAT ROOM
 # ==========================================
 @router.message(ChatState.in_room, F.text.in_(["🏠 Dashboard", "📱 DASHBOARD UTAMA", "/dashboard", "/start"]))
-async def exit_to_dashboard_from_chat(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+async def exit_to_dashboard_from_chat(
+    message: types.Message,
+    state: FSMContext,
+    db: DatabaseService,
+    bot: Bot
+):
     """Jika user menekan menu dashboard saat di chat room, tetap bersihkan room"""
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -328,23 +482,30 @@ async def exit_to_dashboard_from_chat(message: types.Message, state: FSMContext,
     
     # Cleanup semua pesan
     if header_msg_id:
-        try: await bot.delete_message(chat_id, header_msg_id)
-        except: pass
+        try:
+            await bot.delete_message(chat_id, header_msg_id)
+        except:
+            pass
     if instruction_msg_id:
-        try: await bot.delete_message(chat_id, instruction_msg_id)
-        except: pass
+        try:
+            await bot.delete_message(chat_id, instruction_msg_id)
+        except:
+            pass
     for msg_id in sweep_list:
-        try: await bot.delete_message(chat_id, msg_id)
-        except: pass
+        try:
+            await bot.delete_message(chat_id, msg_id)
+        except:
+            pass
     
     # Hapus ReplyKeyboard
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id, temp_msg.message_id)
-    except: pass
+    except:
+        pass
     
     await state.clear()
     
     # Navigasi ke dashboard
     from handlers.start import render_dashboard_ui
-    await render_dashboard_ui(bot, chat_id, user_id, db, state, force_new=True)
+    await render_dashboard_ui(bot, chat_id, user_id, db, None, force_new=True)
