@@ -5,7 +5,10 @@ import asyncio
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputMediaPhoto
+from aiogram.types import (
+    InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputMediaPhoto
+)
 from sqlalchemy import select, and_, not_
 
 from services.database import DatabaseService, User as UserTable, SwipeHistory
@@ -13,6 +16,7 @@ from services.notification import NotificationService
 
 router = Router()
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
+
 
 CITY_DATA_DISC = {
     "city_disc_medan": {"name": "Medan", "lat": 3.5952, "lng": 98.6722, "tag": "MEDAN"},
@@ -32,6 +36,7 @@ CITY_DATA_DISC = {
     "city_disc_lmbk": {"name": "Lombok", "lat": -8.5833, "lng": 116.1167, "tag": "LOMBOK"},
 }
 
+
 class DiscoveryState(StatesGroup):
     in_lobby = State()
     waiting_location = State()
@@ -39,14 +44,17 @@ class DiscoveryState(StatesGroup):
     setting_age_max = State()
     swiping = State()
 
+
 def calculate_distance(lat1, lon1, lat2, lon2):
-    if not all([lat1, lon1, lat2, lon2]): return 0.0
-    R = 6371 
+    if not all([lat1, lon1, lat2, lon2]):
+        return 0.0
+    R = 6371
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
+
 
 def get_age_keyboard():
     kb = []
@@ -57,23 +65,50 @@ def get_age_keyboard():
         if len(row) == 5:
             kb.append(row)
             row = []
-    if row: kb.append(row)
+    if row:
+        kb.append(row)
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def get_swipe_limit(user) -> int:
+    """Menentukan batas swipe berdasarkan kasta"""
+    if user.is_vip_plus:
+        return 50
+    elif user.is_vip:
+        return 30
+    elif user.is_premium:
+        return 20
+    else:
+        return 10
 
 
 # ==========================================
 # 1. CORE UI RENDERER: DISCOVERY LOBBY
 # ==========================================
 async def render_discovery_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None):
-    await state.clear()
+    """Menampilkan lobby discovery dengan filter"""
+    
+    # Cleanup ReplyKeyboard
+    try:
+        temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
+        await bot.delete_message(chat_id, temp_msg.message_id)
+    except:
+        pass
+    
+    if state:
+        await state.clear()
+    
     user = await db.get_user(user_id)
-    if not user: return False
-
-    # ATURAN KASTA SWIPE BARU
-    limit = 50 if user.is_vip_plus else 30 if user.is_vip else 20 if user.is_premium else 10
+    if not user:
+        return False
+    
+    await db.push_nav(user_id, "discovery")
+    
+    # Hitung sisa swipe
+    limit = get_swipe_limit(user)
     sisa = max(0, limit - user.daily_swipe_count)
     target_gender = "Wanita" if user.gender.lower() == "pria" else "Pria"
-
+    
     text = (
         f"🔍 <b>LOBI SWIPE JODOH</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━</code>\n"
@@ -86,35 +121,41 @@ async def render_discovery_ui(bot: Bot, chat_id: int, user_id: int, db: Database
         f"• Lokasi: <b>{user.location_name}</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━</code>"
     )
-
-    # UI Bersih: Daftar Match & Who Like me dipindah ke Hub Notifikasi
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 MULAI MENCARI", callback_data="disc_start_search")],
         [InlineKeyboardButton(text="⚙️ UBAH FILTER USIA", callback_data="disc_set_age")],
         [InlineKeyboardButton(text="📍 UPDATE LOKASI PENCARIAN", callback_data="disc_update_location")],
         [InlineKeyboardButton(text="⬅️ Kembali ke Dashboard", callback_data="back_to_dashboard")]
     ])
-
+    
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
-    # Render UI
     if callback_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
             await bot.answer_callback_query(callback_id)
-        except: pass
+        except:
+            pass
     else:
         try:
             if user.anchor_msg_id:
-                try: await bot.delete_message(chat_id=chat_id, message_id=user.anchor_msg_id)
-                except: pass
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=user.anchor_msg_id)
+                except:
+                    pass
             sent_msg = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
             await db.update_anchor_msg(user_id, sent_msg.message_id)
         except Exception as e:
             logging.error(f"Gagal render Discovery: {e}")
-
+    
     await state.set_state(DiscoveryState.in_lobby)
     return True
+
+
+@router.callback_query(F.data == "menu_discovery")
+async def show_discovery_lobby(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
+    await render_discovery_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
 
 # ==========================================
@@ -126,43 +167,52 @@ async def ask_filter_age_min(callback: types.CallbackQuery, state: FSMContext):
     kb = get_age_keyboard()
     kb.inline_keyboard.append([InlineKeyboardButton(text="❌ Batal", callback_data="disc_cancel_filter")])
     
-    try: await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-    except: pass
+    try:
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+    except:
+        pass
     await state.set_state(DiscoveryState.setting_age_min)
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("age_select_"), DiscoveryState.setting_age_min)
 async def ask_filter_age_max(callback: types.CallbackQuery, state: FSMContext):
     age_min = int(callback.data.split("_")[2])
     await state.update_data(temp_age_min=age_min)
-
+    
     text = f"⚙️ <b>PENGATURAN RENTANG USIA</b>\n\nUsia Minimal: <b>{age_min}</b>\nSekarang tap <b>Usia Maksimal</b> target yang kamu cari:"
     kb = get_age_keyboard()
     kb.inline_keyboard.append([InlineKeyboardButton(text="❌ Batal", callback_data="disc_cancel_filter")])
     
-    try: await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-    except: pass
+    try:
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+    except:
+        pass
     await state.set_state(DiscoveryState.setting_age_max)
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("age_select_"), DiscoveryState.setting_age_max)
 async def save_filter_age(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService, bot: Bot):
     data = await state.get_data()
     age_min = data.get("temp_age_min", 18)
     age_max = int(callback.data.split("_")[2])
-
-    if age_max == 41: age_max = 60
-    if age_min > age_max: age_min, age_max = age_max, age_min 
-
+    
+    if age_max == 41:
+        age_max = 60
+    if age_min > age_max:
+        age_min, age_max = age_max, age_min
+    
     async with db.session_factory() as session:
         user = await session.get(UserTable, callback.from_user.id)
         if user:
             user.filter_age_min = age_min
             user.filter_age_max = age_max
             await session.commit()
-
+    
     await callback.answer(f"✅ Filter usia diubah menjadi {age_min} - {age_max} Tahun!", show_alert=True)
     await render_discovery_ui(bot, callback.message.chat.id, callback.from_user.id, db, state)
+
 
 @router.callback_query(F.data == "disc_cancel_filter")
 async def cancel_filter(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService, bot: Bot):
@@ -177,36 +227,46 @@ async def ask_location(callback: types.CallbackQuery, state: FSMContext):
     inline_kb_list, temp_row = [], []
     for code, info in CITY_DATA_DISC.items():
         temp_row.append(InlineKeyboardButton(text=info["name"], callback_data=code))
-        if len(temp_row) == 3: 
+        if len(temp_row) == 3:
             inline_kb_list.append(temp_row)
             temp_row = []
-    if temp_row: inline_kb_list.append(temp_row)
+    if temp_row:
+        inline_kb_list.append(temp_row)
     inline_kb_list.append([InlineKeyboardButton(text="❌ Batal", callback_data="disc_cancel_filter")])
-
-    text = "📍 <b>UPDATE LOKASI PENCARIAN</b>\n\nPilih kota besarmu atau kirim koordinat GPS untuk memudahkan pencarian teman di sekitarmu."
-    try: await callback.message.edit_caption(caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_kb_list), parse_mode="HTML")
-    except: pass
     
-    # Memunculkan tombol GPS sementara
-    kb_gps = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📍 KIRIM KOORDINAT GPS SEKARANG", request_location=True)]], resize_keyboard=True, one_time_keyboard=True)
+    text = "📍 <b>UPDATE LOKASI PENCARIAN</b>\n\nPilih kota besarmu atau kirim koordinat GPS untuk memudahkan pencarian teman di sekitarmu."
+    try:
+        await callback.message.edit_caption(caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_kb_list), parse_mode="HTML")
+    except:
+        pass
+    
+    # Tombol GPS sementara
+    kb_gps = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 KIRIM KOORDINAT GPS SEKARANG", request_location=True)]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
     msg_gps = await callback.message.answer("<i>Tombol GPS otomatis telah aktif di bawah layar 👇</i>", reply_markup=kb_gps, parse_mode="HTML")
     
     await state.update_data(gps_msg_id=msg_gps.message_id)
-    await state.set_state(DiscoveryState.waiting_location) 
+    await state.set_state(DiscoveryState.waiting_location)
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("city_disc_"), DiscoveryState.waiting_location)
 async def handle_manual_city_discovery(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
-    # Pembersihan tombol GPS yang menggantung
+    # Bersihkan tombol GPS
     try:
         temp_msg = await bot.send_message(chat_id=callback.message.chat.id, text="🔄 Menyimpan lokasi...", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id=callback.message.chat.id, message_id=temp_msg.message_id)
-    except: pass
+    except:
+        pass
     
     data = await state.get_data()
-    try: await bot.delete_message(chat_id=callback.message.chat.id, message_id=data.get('gps_msg_id'))
-    except: pass
-
+    try:
+        await bot.delete_message(chat_id=callback.message.chat.id, message_id=data.get('gps_msg_id'))
+    except:
+        pass
+    
     city_info = CITY_DATA_DISC.get(callback.data)
     if city_info:
         async with db.session_factory() as session:
@@ -215,31 +275,37 @@ async def handle_manual_city_discovery(callback: types.CallbackQuery, db: Databa
                 user.latitude, user.longitude = city_info["lat"], city_info["lng"]
                 user.location_name = city_info["name"]
                 await session.commit()
-                
+        
         await callback.answer(f"✅ Lokasi pencarian: {city_info['name']}")
         await render_discovery_ui(bot, callback.message.chat.id, callback.from_user.id, db, state)
 
+
 @router.message(F.location, DiscoveryState.waiting_location)
 async def handle_location_update(message: types.Message, db: DatabaseService, state: FSMContext, bot: Bot):
-    try: await message.delete()
-    except: pass
-
-    # Hapus ReplyKeyboard dengan mulus
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    # Hapus ReplyKeyboard
     try:
         temp_msg = await message.answer("🔄 Mengunci GPS...", reply_markup=ReplyKeyboardRemove())
         await temp_msg.delete()
-    except: pass
-
+    except:
+        pass
+    
     async with db.session_factory() as session:
         user = await session.get(UserTable, message.from_user.id)
         if user:
             user.latitude, user.longitude, user.location_name = message.location.latitude, message.location.longitude, "GPS Tracker"
             await session.commit()
-            
+    
     data = await state.get_data()
-    try: await bot.delete_message(chat_id=message.chat.id, message_id=data.get('gps_msg_id'))
-    except: pass
-
+    try:
+        await bot.delete_message(chat_id=message.chat.id, message_id=data.get('gps_msg_id'))
+    except:
+        pass
+    
     await render_discovery_ui(bot, message.chat.id, message.from_user.id, db, state)
 
 
@@ -249,11 +315,11 @@ async def handle_location_update(message: types.Message, db: DatabaseService, st
 @router.callback_query(F.data == "disc_start_search", DiscoveryState.in_lobby)
 async def start_swiping(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
+    limit = get_swipe_limit(user)
     
-    limit = 50 if user.is_vip_plus else 30 if user.is_vip else 20 if user.is_premium else 10
-    if user.daily_swipe_count >= limit: 
-        return await callback.answer("❌ Jatah Swipe Anda hari ini habis! Upgrade Tier atau kembali besok.", show_alert=True)
-
+    if user.daily_swipe_count >= limit:
+        return await callback.answer(f"❌ Jatah Swipe Anda ({limit}/hari) habis! Upgrade Tier atau kembali besok.", show_alert=True)
+    
     async with db.session_factory() as session:
         swiped_query = await session.execute(select(SwipeHistory.target_id).where(SwipeHistory.user_id == user.id))
         swiped_ids = [r[0] for r in swiped_query.fetchall()]
@@ -263,33 +329,37 @@ async def start_swiping(callback: types.CallbackQuery, db: DatabaseService, stat
             and_(
                 UserTable.id != user.id,
                 not_(UserTable.id.in_(swiped_ids)),
-                UserTable.gender.ilike(target_gender), 
-                UserTable.age >= user.filter_age_min,              
-                UserTable.age <= user.filter_age_max               
+                UserTable.gender.ilike(target_gender),
+                UserTable.age >= user.filter_age_min,
+                UserTable.age <= user.filter_age_max
             )
-        ).order_by(UserTable.is_vip_plus.desc(), UserTable.is_vip.desc()).limit(20) 
+        ).order_by(UserTable.is_vip_plus.desc(), UserTable.is_vip.desc()).limit(20)
         
         targets = (await session.execute(query)).scalars().all()
-
-    if not targets: 
+    
+    if not targets:
         return await callback.answer("😔 Tidak ada profil baru yang sesuai filter di sekitarmu.", show_alert=True)
     
     await state.update_data(queue=[t.id for t in targets], current_index=0)
     await show_next_profile(callback, state, db)
     await callback.answer()
 
+
 async def show_next_profile(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService):
     data = await state.get_data()
     index, queue = data.get('current_index', 0), data.get('queue', [])
-
+    
     if index >= len(queue):
         await callback.answer("Semua profil telah dilihat. Kembali ke Lobi...", show_alert=True)
         return await render_discovery_ui(callback.bot, callback.message.chat.id, callback.from_user.id, db, state)
-
+    
     target = await db.get_user(queue[index])
     me = await db.get_user(callback.from_user.id)
     jarak = calculate_distance(me.latitude, me.longitude, target.latitude, target.longitude)
-
+    
+    limit = get_swipe_limit(me)
+    sisa_swipe = max(0, limit - me.daily_swipe_count)
+    
     text = (
         f"🔍 <b>DISCOVERY MODE</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━</code>\n"
@@ -298,9 +368,9 @@ async def show_next_profile(callback: types.CallbackQuery, state: FSMContext, db
         f"🔥 <b>Minat:</b> {target.interests or '-'}\n"
         f"📝 <blockquote>{target.bio or 'Tidak ada bio.'}</blockquote>\n"
         f"<code>━━━━━━━━━━━━━━━━━━</code>\n"
-        f"<i>{index+1} dari {len(queue)} profil | Sisa Swipe: {max(0, (50 if me.is_vip_plus else 30 if me.is_vip else 20 if me.is_premium else 10) - me.daily_swipe_count)}</i>"
+        f"<i>{index+1} dari {len(queue)} profil | Sisa Swipe: {sisa_swipe}/{limit}</i>"
     )
-
+    
     kb_buttons = [
         [
             InlineKeyboardButton(text="❤️ LIKE", callback_data="swipe_like"),
@@ -311,14 +381,17 @@ async def show_next_profile(callback: types.CallbackQuery, state: FSMContext, db
     
     if me.is_vip_plus:
         kb_buttons.insert(1, [InlineKeyboardButton(text="↩️ CALLBACK PROFIL SEBELUMNYA", callback_data="swipe_callback")])
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
     media = InputMediaPhoto(media=target.photo_id, caption=text, parse_mode="HTML")
     
-    try: await callback.message.edit_media(media=media, reply_markup=kb)
-    except: pass
+    try:
+        await callback.message.edit_media(media=media, reply_markup=kb)
+    except:
+        pass
     
     await state.set_state(DiscoveryState.swiping)
+
 
 # ==========================================
 # 5. AKSI TOMBOL SWIPING
@@ -328,52 +401,62 @@ async def handle_swipe(callback: types.CallbackQuery, state: FSMContext, db: Dat
     data = await state.get_data()
     user_id, queue, index = callback.from_user.id, data.get('queue', []), data.get('current_index', 0)
     
-    if index >= len(queue): 
+    if index >= len(queue):
         return await callback.answer()
-        
-    target_id = queue[index]
-    action = callback.data.split("_")[1] 
     
-    try: await db.record_swipe(user_id, target_id, action)
-    except: pass
+    target_id = queue[index]
+    action = callback.data.split("_")[1]
+    
+    try:
+        await db.record_swipe(user_id, target_id, action)
+    except:
+        pass
     
     is_match = False
     if action == "like":
-        # Perbaiki Logika Match Database
         async with db.session_factory() as session:
-            check_match = await session.execute(select(SwipeHistory).where(and_(SwipeHistory.user_id == target_id, SwipeHistory.target_id == user_id, SwipeHistory.action == "like")))
+            check_match = await session.execute(select(SwipeHistory).where(
+                and_(SwipeHistory.user_id == target_id, SwipeHistory.target_id == user_id, SwipeHistory.action == "like")
+            ))
             if check_match.scalar_one_or_none():
                 is_match = True
             else:
-                try: await NotificationService(bot, db).send_push_alert(target_id, "LIKE") 
-                except: pass
-                
+                try:
+                    await NotificationService(bot, db).trigger_like(target_id, user_id)
+                except:
+                    pass
+        
         if is_match:
-            # Panggil fungsi process_match agar tersimpan di tabel UserNotification sebagai "MATCH"
             await db.process_match_logic(user_id, target_id)
             user_a, user_b = await db.get_user(user_id), await db.get_user(target_id)
-            try: await bot.send_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_a.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
-            except: pass
-            try: await bot.send_message(user_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_b.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
-            except: pass
+            try:
+                await bot.send_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_a.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
+            except:
+                pass
+            try:
+                await bot.send_message(user_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_b.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
+            except:
+                pass
             await callback.answer("🎉 IT'S A MATCH! Cek menu Notifikasi!", show_alert=True)
         else:
             await callback.answer("❤️ Like terkirim!", show_alert=False)
     else:
-        await callback.answer("Lewati", show_alert=False)
-
+        await callback.answer("👎 Lewati", show_alert=False)
+    
     await state.update_data(current_index=index + 1)
     await show_next_profile(callback, state, db)
+
 
 @router.callback_query(F.data == "swipe_callback", DiscoveryState.swiping)
 async def handle_callback_vip(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService):
     user = await db.get_user(callback.from_user.id)
-    if not user.is_vip_plus: return await callback.answer("🔒 Fitur 'Call Back' eksklusif untuk VIP+!", show_alert=True)
+    if not user.is_vip_plus:
+        return await callback.answer("🔒 Fitur 'Call Back' eksklusif untuk VIP+!", show_alert=True)
     
     index = (await state.get_data()).get('current_index', 0)
-    if index <= 0: return await callback.answer("Tidak ada profil sebelumnya.", show_alert=True)
+    if index <= 0:
+        return await callback.answer("Tidak ada profil sebelumnya.", show_alert=True)
     
     await state.update_data(current_index=index - 1)
-    # Hapus hitungan swipe sebelumnya (opsional jika ingin bonus, atau biarkan tetap terhitung)
     await show_next_profile(callback, state, db)
     await callback.answer()
