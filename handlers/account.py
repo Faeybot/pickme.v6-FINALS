@@ -56,12 +56,12 @@ class EditProfile(StatesGroup):
 
 
 # ==========================================
-# 2. RENDERER UTAMA: AKUN HUB (DIPANGGIL DARI START.PY)
+# 2. RENDERER UTAMA: AKUN HUB
 # ==========================================
 async def render_account_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None):
     """Menu utama Akun - Hanya gerbang ke sub-menu"""
     
-    # Cleanup
+    # Cleanup ReplyKeyboard
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id, temp_msg.message_id)
@@ -93,12 +93,12 @@ async def render_account_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseS
         f"👤 <b>{user.full_name.upper()}</b> | {kasta}\n"
         f"💰 Saldo: <b>{user.poin_balance:,} Poin</b>\n"
         f"📍 Lokasi: <b>{user.location_name}</b>\n\n"
-        f"Pilih menu di bawah untuk mengelola profil atau melihat detail status:"
+        f"Kelola bagaimana profilmu tampil di <i>Discovery</i> dan pantau sisa kuota harianmu."
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 LIHAT & EDIT PROFIL", callback_data="menu_profile")],
-        [InlineKeyboardButton(text="📊 CEK STATUS & KUOTA", callback_data="menu_status")],
+        [InlineKeyboardButton(text="👤 LIHAT & EDIT PROFIL", callback_data="acc_view_profile")],
+        [InlineKeyboardButton(text="📊 CEK STATUS & KUOTA", callback_data="acc_view_status")],
         [InlineKeyboardButton(text="⬅️ Kembali ke Dashboard", callback_data="back_to_dashboard")]
     ])
     
@@ -108,24 +108,24 @@ async def render_account_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseS
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
             await bot.answer_callback_query(callback_id)
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Edit media gagal: {e}")
     else:
         try:
             sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
             await db.update_anchor_msg(user_id, sent.message_id)
         except Exception as e:
-            logging.error(f"Gagal render account hub: {e}")
+            logging.error(f"Kirim ulang gagal: {e}")
     
     return True
 
 
 # ==========================================
-# 3. SUB-MENU: LIHAT & EDIT PROFIL (FULL PROFILE)
+# 3. HANDLER: LIHAT & EDIT PROFIL
 # ==========================================
-@router.callback_query(F.data == "menu_profile")
-async def show_full_profile(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
-    """Menampilkan profil lengkap user dengan opsi edit"""
+@router.callback_query(F.data == "acc_view_profile")
+async def handle_view_profile(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
+    """Menampilkan profil lengkap user"""
     await render_full_profile_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
 
@@ -146,7 +146,7 @@ async def render_full_profile_ui(bot: Bot, chat_id: int, user_id: int, db: Datab
     minat_list = [INTEREST_MAP.get(code, code) for code in interest_codes]
     minat = ", ".join(minat_list) if minat_list else "-"
     
-    bio = html.escape(user.bio) if user.bio else "Belum ada bio. Ayo tulis sesuatu!"
+    bio = html.escape(user.bio) if user.bio else "Belum ada bio"
     kota = html.escape(user.location_name) if user.location_name else "Belum diatur"
     gender = "👨 Pria" if user.gender == "Pria" else "👩 Wanita" if user.gender == "Wanita" else "Rahasia"
     
@@ -200,10 +200,10 @@ async def render_full_profile_ui(bot: Bot, chat_id: int, user_id: int, db: Datab
 
 
 # ==========================================
-# 4. SUB-MENU: CEK STATUS & KUOTA
+# 4. HANDLER: CEK STATUS & KUOTA
 # ==========================================
-@router.callback_query(F.data == "menu_status")
-async def show_status(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+@router.callback_query(F.data == "acc_view_status")
+async def handle_view_status(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     """Menampilkan status kuota user"""
     await render_status_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
 
@@ -238,7 +238,6 @@ async def render_status_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseSer
         f"📊 <b>STATUS AKUN & KUOTA</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
         f"👑 <b>Status Akun:</b> {kasta}\n\n"
-        
         f"📑 <b>Sisa Kuota Harian</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
         f"🔍 Swipe Jodoh: <b>{swipe_left} / {swipe_limit}</b>\n"
@@ -248,7 +247,6 @@ async def render_status_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseSer
         f"📝 Post Teks Feed: <b>{user.daily_feed_text_quota}</b>\n"
         f"📸 Post Foto Feed: <b>{user.daily_feed_photo_quota}</b>\n"
         f"<i>(Reset setiap pukul 00:00 WIB)</i>\n\n"
-        
         f"🚀 <b>Tiket Boost</b>\n"
         f"🎁 Boost Gratis: <b>{user.weekly_free_boost}</b>\n"
         f"🎫 Boost Berbayar: <b>{user.paid_boost_balance}</b>\n"
@@ -279,47 +277,30 @@ async def render_status_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseSer
 
 
 # ==========================================
-# 5. SUB-MENU: EDIT PROFIL (HUB)
+# 5. HANDLER: EDIT PROFIL (MENU)
 # ==========================================
 @router.callback_query(F.data == "acc_edit_menu")
-async def handle_edit_hub(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    """Menu hub untuk edit profil"""
-    await render_edit_hub(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
-
-
-async def render_edit_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, callback_id: str = None):
-    """Tampilan menu edit profil"""
-    user = await db.get_user(user_id)
-    if not user:
-        return False
+async def handle_edit_menu(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    """Menu edit profil"""
+    user = await db.get_user(callback.from_user.id)
     
-    await db.push_nav(user_id, "edit_profile")
-    
-    text = "✏️ <b>PUSAT PENGATURAN PROFIL</b>\n\nBagian mana yang ingin Anda ubah hari ini?"
+    text = "✏️ <b>EDIT PROFIL</b>\n\nApa yang ingin diubah?"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Edit Bio", callback_data="update_bio"),
-         InlineKeyboardButton(text="📍 Update Lokasi", callback_data="update_loc")],
-        [InlineKeyboardButton(text="🔥 Ubah Minat", callback_data="update_interests")],
-        [InlineKeyboardButton(text="⬅️ Kembali ke Profil Saya", callback_data="menu_profile")]
+         InlineKeyboardButton(text="📍 Edit Lokasi", callback_data="update_loc")],
+        [InlineKeyboardButton(text="🔥 Edit Minat", callback_data="update_interests")],
+        [InlineKeyboardButton(text="⬅️ Kembali ke Profil", callback_data="menu_profile")]
     ])
     
     media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
-    if callback_id:
-        try:
-            await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
-            await bot.answer_callback_query(callback_id)
-        except:
-            pass
-    else:
-        try:
-            sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-            await db.update_anchor_msg(user_id, sent.message_id)
-        except:
-            pass
+    try:
+        await bot.edit_message_media(chat_id=callback.message.chat.id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
+    except:
+        pass
     
-    return True
+    await callback.answer()
 
 
 # ==========================================
