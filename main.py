@@ -23,7 +23,7 @@ from handlers import (
     discovery, feed, preview,
     chat, inbox, unmask, match,
     who_like_me, who_see_me,
-    wallet, pricing, boost,
+    wallet, pricing, boost, status,
     admin, control_panel, help as help_handler
 )
 
@@ -125,6 +125,7 @@ async def main():
     dp.include_router(registration.router)
     dp.include_router(start.router)
     dp.include_router(account.router)
+    dp.include_router(status.router)
     dp.include_router(wallet.router)
     dp.include_router(pricing.router)
     dp.include_router(chat.router)
