@@ -24,7 +24,7 @@ from handlers import (
     chat, inbox, unmask, match,
     who_like_me, who_see_me,
     wallet, pricing, boost,
-    admin, help as help_handler
+    admin, control_panel, help as help_handler
 )
 
 # ==========================================
@@ -139,6 +139,7 @@ async def main():
     dp.include_router(boost.router)
     dp.include_router(help_handler.router)
     dp.include_router(admin.router)
+    dp.include_router(control_panel.router)
 
     # --- 🛡️ GLOBAL ERROR HANDLER ---
     @dp.error()
