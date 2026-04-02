@@ -15,5 +15,6 @@ from . import (
     pricing,
     boost,
     admin,
+    control_panel,
     help
 )
