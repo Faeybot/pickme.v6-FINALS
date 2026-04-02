@@ -3,6 +3,7 @@ import html
 import datetime
 import logging
 import asyncio
+import re
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -35,7 +36,6 @@ def render_history_text(history_list, limit=15):
     for m in subset:
         sender = m.get('s', '?')[:12]
         text = m.get('t', '')[:200]
-        time = m.get('ts', '')
         lines.append(f"<b>{sender}:</b> {html.escape(text)}")
     return "\n".join(lines)
 
@@ -309,7 +309,6 @@ async def handle_load_history(callback: types.CallbackQuery, db: DatabaseService
     # Edit caption header
     try:
         current_caption = callback.message.caption
-        import re
         pattern = r'<b>\[Riwayat Terakhir\]</b>\n.*?\n<code>━━━━━━━━━━━━━━━━━━━━━━</code>'
         replacement = f'<b>[Riwayat Terakhir]</b>\n{history_text}\n<code>━━━━━━━━━━━━━━━━━━━━━━</code>'
         new_caption = re.sub(pattern, replacement, current_caption, flags=re.DOTALL)
@@ -320,12 +319,12 @@ async def handle_load_history(callback: types.CallbackQuery, db: DatabaseService
             parse_mode="HTML"
         )
     except Exception as e:
-        pass
+        logging.error(f"Load history error: {e}")
     await callback.answer()
 
 
 # ==========================================
-# 5. HANDLER: PROSES PESAN DI RUANG CHAT
+# 5. HANDLER: PROSES PESAN DI RUANG CHAT (DENGAN SISTEM POIN)
 # ==========================================
 @router.message(ChatState.in_room, F.text != "🛑 AKHIRI OBROLAN")
 async def process_chat_relay(
@@ -334,7 +333,8 @@ async def process_chat_relay(
     db: DatabaseService,
     bot: Bot
 ):
-    """Memproses pesan yang dikirim di ruang chat"""
+    """Memproses pesan yang dikirim di ruang chat dengan sistem poin"""
+    
     data = await state.get_data()
     target_id = data.get('current_target_id')
     user = await db.get_user(message.from_user.id)
@@ -350,7 +350,7 @@ async def process_chat_relay(
         return
     
     # ========== SIMPAN KE HISTORY DATABASE (Rolling Buffer) ==========
-    await db.add_chat_history(user.id, target_id, user.full_name, message.text)
+    chat_sess = await db.add_chat_history(user.id, target_id, user.full_name, message.text)
     
     # ========== KIRIM KE TARGET ==========
     target_text = f"<b>{user.full_name}:</b>\n{html.escape(message.text)}"
@@ -375,6 +375,35 @@ async def process_chat_relay(
         except:
             pass
     
+    # ========== SISTEM POIN ==========
+    # Ambil sesi chat untuk mengetahui origin
+    current_sess = await db.get_active_chat_session(user.id, target_id)
+    origin = current_sess.origin if current_sess else "public"
+    
+    # POIN UNTUK TARGET (PENERIMA PESAN)
+    # +100 Poin untuk target saat menerima pesan (hanya sekali per sesi)
+    if origin != "unmask":  # Unmask sudah punya sistem bonus sendiri di unmask.py
+        receive_key = f"Receive_Message_{target_id}_{user.id}_{current_sess.id if current_sess else '0'}"
+        bonus_exists = await db.check_bonus_exists(receive_key)
+        if not bonus_exists:
+            await db.add_points_with_log(target_id, 100, receive_key)
+            try:
+                await bot.send_message(target_id, "📩 +100 Poin (Pesan masuk!)", parse_mode="HTML")
+            except:
+                pass
+    
+    # POIN UNTUK PENGIRIM (YANG MEMBALAS)
+    # +200 Poin untuk pengirim jika ini adalah balasan pertama di sesi ini
+    if origin != "unmask":  # Unmask sudah punya sistem bonus sendiri di unmask.py
+        reply_key = f"First_Reply_{user.id}_{target_id}_{current_sess.id if current_sess else '0'}"
+        bonus_exists = await db.check_bonus_exists(reply_key)
+        if not bonus_exists:
+            # Cek apakah ini balasan pertama (belum ada history dari user ini ke target di sesi ini)
+            history_check = await db.get_chat_history(user.id, target_id, limit=2)
+            if not history_check or len(history_check) <= 2:  # Hanya pesan pertama atau kedua
+                await db.add_points_with_log(user.id, 200, reply_key)
+                await message.answer("🎉 +200 Poin (Bonus balas pesan!)", parse_mode="HTML")
+    
     # ========== TAMPILKAN BALON PESAN DI ROOM SENDIRI ==========
     sent_bubble = await message.answer(
         f"<b>Anda:</b>\n{html.escape(message.text)}",
@@ -387,7 +416,6 @@ async def process_chat_relay(
     await state.update_data(sweep_list=sweep_list)
     
     # ========== LOG KE CHANNEL ADMIN (OPSIONAL) ==========
-    chat_sess = await db.get_active_chat_session(user.id, target_id)
     if chat_sess and chat_sess.thread_id:
         try:
             admin_log = f"💬 <b>CHAT RELAY</b>\nFrom: <code>{user.id}</code> To: <code>{target_id}</code>\nMsg: {message.text[:200]}"
