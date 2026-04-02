@@ -515,17 +515,15 @@ async def manage_photos_handler(callback: types.CallbackQuery, db: DatabaseServi
     await callback.answer()
 
 # ==========================================
-# GANTI FOTO UTAMA (MENGGUNAKAN LOGIKA REGISTRASI)
+# GANTI FOTO UTAMA (VERSI PALING SEDERHANA)
 # ==========================================
 @router.callback_query(F.data == "change_photo_main")
 async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]
-    ])
-    
-    await callback.message.edit_caption(
-        caption="📸 <b>GANTI FOTO UTAMA</b>\n\nKirimkan foto baru untuk profil Anda:",
-        reply_markup=kb,
+    # Kirim pesan baru (bukan edit)
+    await callback.message.answer(
+        "📸 <b>GANTI FOTO UTAMA</b>\n\n"
+        "Silakan kirim foto baru untuk foto profil Anda.\n\n"
+        "<i>Kirim foto sekarang...</i>",
         parse_mode="HTML"
     )
     await state.set_state(EditProfile.waiting_for_photo_main)
@@ -534,40 +532,38 @@ async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(EditProfile.waiting_for_photo_main, F.photo)
 async def save_new_main(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
-    """Simpan foto utama baru - menggunakan logika seperti registrasi"""
+    """Simpan foto utama baru"""
     
-    # Simpan foto
+    # 1. Simpan foto ke database
     await db.update_main_photo(message.from_user.id, message.photo[-1].file_id)
     
-    # Hapus pesan user
+    # 2. Hapus pesan user (biar chat bersih)
     try:
         await message.delete()
     except:
         pass
     
-    # Kirim pesan sukses (seperti di registrasi)
+    # 3. KIRIM PESAN KONFIRMASI (PENTING!)
     await message.answer("✅ Foto utama berhasil diganti!", parse_mode="HTML")
     
-    # Bersihkan state
+    # 4. Bersihkan state
     await state.clear()
     
-    # 🚨 KRUSIAL: Kembali ke menu manajemen foto
-    # Buat callback query palsu seperti yang dilakukan di registration.py
-    from aiogram.types import CallbackQuery
+    # 5. Kembali ke menu manajemen foto dengan mengirim pesan baru
+    user = await db.get_user(message.from_user.id)
+    extra = user.extra_photos or []
     
-    # Buat objek callback palsu
-    fake_callback = types.CallbackQuery(
-        id="fake",
-        from_user=message.from_user,
-        message=message,
-        chat_instance="fake",
-        data="manage_photos"
-    )
+    text = "📸 <b>MANAJEMEN GALERI FOTO</b>\n\nPilih aksi yang ingin Anda lakukan:"
     
-    # Panggil handler manage_photos
-    from handlers.account import manage_photos_handler
-    await manage_photos_handler(fake_callback, db, bot)
-
+    kb = [[InlineKeyboardButton(text="🖼️ GANTI FOTO UTAMA", callback_data="change_photo_main")]]
+    if len(extra) < 2:
+        kb.append([InlineKeyboardButton(text="➕ TAMBAH FOTO EXTRA", callback_data="add_photo_extra")])
+    if extra:
+        kb.append([InlineKeyboardButton(text="🗑️ HAPUS SEMUA FOTO EXTRA", callback_data="clear_photo_extra")])
+    kb.append([InlineKeyboardButton(text="🔙 KEMBALI KE PROFIL", callback_data="menu_profile")])
+    
+    # Kirim pesan baru (bukan edit)
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
 
 # ==========================================
 # TAMBAH FOTO EXTRA
