@@ -220,7 +220,7 @@ async def cancel_filter(callback: types.CallbackQuery, state: FSMContext, db: Da
 
 
 # ==========================================
-# 3. UPDATE LOKASI PENCARIAN (TEMPORARY GPS)
+# 3. UPDATE LOKASI PENCARIAN
 # ==========================================
 @router.callback_query(F.data == "disc_update_location", DiscoveryState.in_lobby)
 async def ask_location(callback: types.CallbackQuery, state: FSMContext):
@@ -371,16 +371,23 @@ async def show_next_profile(callback: types.CallbackQuery, state: FSMContext, db
         f"<i>{index+1} dari {len(queue)} profil | Sisa Swipe: {sisa_swipe}/{limit}</i>"
     )
     
+    # ==========================================
+    # TOMBOL SESUAI PERMINTAAN:
+    # [DISLIKE] [LIKE]
+    # [KIRIM PESAN] [CALLBACK]
+    # [KEMBALI]
+    # ==========================================
     kb_buttons = [
         [
-            InlineKeyboardButton(text="❤️ LIKE", callback_data="swipe_like"),
-            InlineKeyboardButton(text="❌ DISLIKE", callback_data="swipe_skip")
+            InlineKeyboardButton(text="❌ DISLIKE", callback_data="swipe_skip"),
+            InlineKeyboardButton(text="❤️ LIKE", callback_data="swipe_like")
         ],
-        [InlineKeyboardButton(text="🛑 Berhenti (Ke Lobi)", callback_data="disc_cancel_filter")]
+        [
+            InlineKeyboardButton(text="💬 KIRIM PESAN", callback_data=f"chat_{target.id}_discovery"),
+            InlineKeyboardButton(text="↩️ CALLBACK", callback_data="swipe_callback")
+        ],
+        [InlineKeyboardButton(text="🏠 KEMBALI KE LOBI", callback_data="disc_cancel_filter")]
     ]
-    
-    if me.is_vip_plus:
-        kb_buttons.insert(1, [InlineKeyboardButton(text="↩️ CALLBACK PROFIL SEBELUMNYA", callback_data="swipe_callback")])
     
     kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
     media = InputMediaPhoto(media=target.photo_id, caption=text, parse_mode="HTML")
@@ -441,22 +448,79 @@ async def handle_swipe(callback: types.CallbackQuery, state: FSMContext, db: Dat
         else:
             await callback.answer("❤️ Like terkirim!", show_alert=False)
     else:
-        await callback.answer("👎 Lewati", show_alert=False)
+        await callback.answer("👎 Dilewati", show_alert=False)
     
     await state.update_data(current_index=index + 1)
     await show_next_profile(callback, state, db)
 
 
+# ==========================================
+# 6. HANDLER: CALLBACK (FITUR KHUSUS VIP+)
+# ==========================================
 @router.callback_query(F.data == "swipe_callback", DiscoveryState.swiping)
 async def handle_callback_vip(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService):
+    """Fitur Callback - hanya untuk VIP+"""
     user = await db.get_user(callback.from_user.id)
+    
     if not user.is_vip_plus:
-        return await callback.answer("🔒 Fitur 'Call Back' eksklusif untuk VIP+!", show_alert=True)
+        # Tampilkan pesan upgrade
+        text = (
+            "🔒 <b>FITUR CALLBACK TERKUNCI</b>\n\n"
+            "Fitur <b>Callback</b> (melihat profil sebelumnya) hanya untuk member <b>VIP+</b>!\n\n"
+            "💎 <b>Keuntungan VIP+:</b>\n"
+            "• Bisa melihat profil yang sudah dilewat\n"
+            "• Bisa membongkar identitas anonim\n"
+            "• Kuota lebih besar\n\n"
+            "Upgrade sekarang dan dapatkan akses penuh!"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💎 UPGRADE KE VIP+", callback_data="menu_pricing")],
+            [InlineKeyboardButton(text="⬅️ Kembali", callback_data="disc_cancel_filter")]
+        ])
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        return
     
     index = (await state.get_data()).get('current_index', 0)
     if index <= 0:
-        return await callback.answer("Tidak ada profil sebelumnya.", show_alert=True)
+        await callback.answer("⚠️ Tidak ada profil sebelumnya.", show_alert=True)
+        return
     
     await state.update_data(current_index=index - 1)
     await show_next_profile(callback, state, db)
-    await callback.answer()
+    await callback.answer("↩️ Kembali ke profil sebelumnya!", show_alert=False)
+
+
+# ==========================================
+# 7. HANDLER: KIRIM PESAN (CEK KASTA)
+# ==========================================
+@router.callback_query(F.data.startswith("chat_"), DiscoveryState.swiping)
+async def handle_send_message_from_discovery(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService, bot: Bot):
+    """Handler untuk tombol Kirim Pesan di Discovery - dengan pengecekan kasta"""
+    user = await db.get_user(callback.from_user.id)
+    
+    # Cek apakah user VIP/VIP+
+    if not (user.is_vip or user.is_vip_plus):
+        # Tampilkan pesan upgrade
+        text = (
+            "🔒 <b>FITUR KIRIM PESAN TERKUNCI</b>\n\n"
+            "Fitur <b>Kirim Pesan Langsung (DM)</b> hanya untuk member <b>VIP / VIP+</b>!\n\n"
+            "💎 <b>Keuntungan VIP/VIP+:</b>\n"
+            "• Bisa kirim pesan langsung ke siapa saja\n"
+            "• Kuota DM lebih besar\n"
+            "• Prioritas di Discovery\n\n"
+            "Upgrade sekarang dan dapatkan akses penuh!"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💎 UPGRADE SEKARANG", callback_data="menu_pricing")],
+            [InlineKeyboardButton(text="⬅️ Kembali ke Swipe", callback_data="disc_cancel_filter")]
+        ])
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        return
+    
+    # Lanjut ke proses chat (handler di chat.py akan menangani sisanya)
+    # Biarkan callback dilanjutkan ke handler chat_ di chat.py
+    # Tapi kita perlu meneruskan karena handler ini sudah menangkap duluan
+    # Solusi: panggil langsung fungsi dari chat.py
+    
+    from handlers.chat import start_chat_from_callback
+    await start_chat_from_callback(callback, db, bot, state)
