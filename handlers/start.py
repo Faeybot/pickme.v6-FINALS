@@ -4,7 +4,7 @@ import asyncio
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import CommandStart, Command, CommandObject
-from aiogram.types import InputMediaPhoto
+from aiogram.types import InputMediaPhoto, ReplyKeyboardRemove
 
 from services.database import DatabaseService
 from utils.ui_manager import UIManager
@@ -19,7 +19,8 @@ BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 # ==========================================
 async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None, force_new: bool = False):
     """Menampilkan dashboard utama dengan navigasi inline"""
-    # ========== CLEANUP: Hapus ReplyKeyboard jika ada ==========
+    
+    # Cleanup ReplyKeyboard
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id, temp_msg.message_id)
@@ -82,58 +83,7 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
 
 
 # ==========================================
-# 2. SUB-MENU RENDERERS (HUB)
-# ==========================================
-async def render_notification_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
-    """Menampilkan pusat notifikasi"""
-    unreads = await db.get_all_unread_counts(user_id)
-    text = "🔔 <b>PUSAT NOTIFIKASI</b>\n\nPantau semua interaksi profilmu di sini. Jangan biarkan pesan atau <i>match</i> barumu menunggu terlalu lama!"
-    kb = UIManager.get_notification_center_kb(unreads)
-    
-    media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
-    if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
-    else:
-        await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-
-
-async def render_account_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
-    """Menampilkan pusat akun"""
-    user = await db.get_user(user_id)
-    if user.is_vip_plus:
-        kasta = "💎 VIP+"
-    elif user.is_vip:
-        kasta = "🌟 VIP"
-    elif user.is_premium:
-        kasta = "🎭 PREMIUM"
-    else:
-        kasta = "👤 FREE"
-    
-    text = f"⚙️ <b>PUSAT AKUN & STATUS</b>\n\nKelola bagaimana profilmu tampil di <i>Discovery</i> dan pantau sisa kuota harian tier <b>{kasta}</b> kamu hari ini."
-    kb = UIManager.get_account_center_kb()
-    
-    media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
-    if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
-    else:
-        await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-
-
-async def render_finance_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
-    """Menampilkan pusat keuangan"""
-    user = await db.get_user(user_id)
-    text = f"💳 <b>DOMPET & REWARD</b>\n\nSaldo Poin: <b>{user.poin_balance:,} Poin</b>\n\nBagikan <i>link</i> referralmu untuk mendapatkan koin tambahan, atau cairkan poinmu menjadi uang tunai (Syarat: Status Premium)."
-    kb = UIManager.get_finance_center_kb()
-    
-    media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
-    if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
-    else:
-        await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-
-
-# ==========================================
-# 3. HANDLERS UTAMA (/start & Command)
+# 2. HANDLERS UTAMA (/start & Command)
 # ==========================================
 @router.message(CommandStart())
 @router.message(Command("dashboard"))
@@ -177,26 +127,8 @@ async def command_start_handler(message: types.Message, command: CommandObject =
     await render_dashboard_ui(bot, chat_id, user_id, db, state, force_new=True)
 
 
-@router.message(Command("notifikasi"))
-async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
-    try:
-        await message.delete()
-    except:
-        pass
-    await render_notification_hub(message, db, bot, message.from_user.id)
-
-
-@router.message(Command("wallet"))
-async def cmd_wallet(message: types.Message, db: DatabaseService, bot: Bot):
-    try:
-        await message.delete()
-    except:
-        pass
-    await render_finance_hub(message, db, bot, message.from_user.id)
-
-
 # ==========================================
-# 4. CALLBACK ROUTER (Navigasi Inline)
+# 3. GERBANG KE MODUL LAIN (CALLBACK ROUTER)
 # ==========================================
 @router.callback_query(F.data == "check_join_start")
 async def verify_join_start(callback: types.CallbackQuery, bot: Bot, db: DatabaseService, state: FSMContext):
@@ -216,36 +148,73 @@ async def back_to_dashboard_callback(callback: types.CallbackQuery, db: Database
     await render_dashboard_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
 
-@router.callback_query(F.data == "menu_notifications")
-async def cb_menu_notifications(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    await render_notification_hub(callback, db, bot, callback.from_user.id)
-
-
 @router.callback_query(F.data == "menu_account")
-async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    await render_account_hub(callback, db, bot, callback.from_user.id)
+async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    """GERBANG: Arahkan ke Account Hub di account.py"""
+    from handlers.account import render_account_hub
+    await render_account_hub(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
 
 @router.callback_query(F.data == "menu_finance")
-async def cb_menu_finance(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    await render_finance_hub(callback, db, bot, callback.from_user.id)
+async def cb_menu_finance(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    """GERBANG: Arahkan ke Wallet Hub di wallet.py"""
+    from handlers.wallet import render_wallet_hub
+    await render_wallet_hub(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
+
+
+@router.callback_query(F.data == "menu_notifications")
+async def cb_menu_notifications(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    """GERBANG: Arahkan ke Notification Hub"""
+    from handlers.notification import render_notification_hub
+    await render_notification_hub(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
 
 
 @router.callback_query(F.data == "menu_feed")
 async def cb_menu_feed(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    """GERBANG: Arahkan ke Feed Menu"""
     from handlers.feed import render_feed_ui
-    await render_feed_ui(bot, callback.message.chat.id, callback.from_user.id, db, state)
-    await callback.answer()
+    await render_feed_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
 
 @router.callback_query(F.data == "menu_discovery")
 async def cb_menu_discovery(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    """GERBANG: Arahkan ke Discovery Menu"""
     from handlers.discovery import render_discovery_ui
-    await render_discovery_ui(bot, callback.message.chat.id, callback.from_user.id, db, state)
-    await callback.answer()
-    
+    await render_discovery_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
+
 
 @router.callback_query(F.data == "menu_pricing")
 async def cb_menu_pricing(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    """GERBANG: Arahkan ke Pricing Store"""
     from handlers.pricing import render_pricing_main_ui
     await render_pricing_main_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
+
+
+@router.message(Command("notifikasi"))
+async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
+    try:
+        await message.delete()
+    except:
+        pass
+    from handlers.notification import render_notification_hub
+    await render_notification_hub(message, db, bot, message.from_user.id)
+
+
+@router.message(Command("wallet"))
+async def cmd_wallet(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
+    try:
+        await message.delete()
+    except:
+        pass
+    from handlers.wallet import render_wallet_hub
+    await render_wallet_hub(bot, message.chat.id, message.from_user.id, db, state)
+
+
+@router.message(Command("account"))
+async def cmd_account(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
+    try:
+        await message.delete()
+    except:
+        pass
+    from handlers.account import render_account_hub
+    await render_account_hub(bot, message.chat.id, message.from_user.id, db, state)
