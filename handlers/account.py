@@ -473,63 +473,77 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
 
 
 # ==========================================
-# 10. MANAJEMEN GALERI FOTO (DIPERBAIKI)
+# MANAJEMEN GALERI FOTO (DIPERBAIKI)
 # ==========================================
+
 async def render_manage_photos_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService):
     """Menu manajemen galeri foto"""
     user = await db.get_user(user_id)
+    if not user:
+        return
+    
     extra = user.extra_photos or []
     
-    # Buat preview foto-foto yang ada
-    caption_text = "📸 <b>MANAJEMEN GALERI FOTO</b>\n\n"
+    text = (
+        "📸 <b>MANAJEMEN GALERI FOTO</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━</code>\n\n"
+        f"📷 <b>Foto Utama:</b> ✅ Ada\n"
+        f"📷 <b>Foto Tambahan:</b> {len(extra)}/2\n\n"
+        "Pilih aksi di bawah:"
+    )
     
-    if extra:
-        caption_text += f"📷 <b>Foto Tambahan ({len(extra)}/2):</b>\n"
-        for i, photo in enumerate(extra, 1):
-            caption_text += f"   {i}. Foto {i}\n"
-        caption_text += "\n"
-    else:
-        caption_text += "<i>Belum ada foto tambahan.</i>\n\n"
+    kb = []
     
-    caption_text += "Sesuaikan foto-foto terbaikmu agar lebih memikat di Discovery.\n\n"
-    caption_text += "⬇️ <i>Pilih aksi di bawah:</i>"
+    # Tombol ganti foto utama
+    kb.append([InlineKeyboardButton(text="🖼️ GANTI FOTO UTAMA", callback_data="change_photo_main")])
     
-    kb = [
-        [InlineKeyboardButton(text="🖼️ GANTI FOTO UTAMA", callback_data="change_photo_main")]
-    ]
+    # Tombol tambah foto extra (jika kurang dari 2)
     if len(extra) < 2:
         kb.append([InlineKeyboardButton(text="➕ TAMBAH FOTO EXTRA", callback_data="add_photo_extra")])
+    
+    # Tombol hapus semua foto extra (jika ada)
     if extra:
         kb.append([InlineKeyboardButton(text="🗑️ HAPUS SEMUA FOTO EXTRA", callback_data="clear_photo_extra")])
+    
+    # Tombol kembali
     kb.append([InlineKeyboardButton(text="⬅️ Kembali ke Profil Saya", callback_data="menu_profile")])
     
-    media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=caption_text, parse_mode="HTML")
-
+    media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
+    
     try:
         await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-    except Exception:
-        pass
-    return True
+    except Exception as e:
+        logging.error(f"render_manage_photos_ui edit failed: {e}")
+        sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+        await db.update_anchor_msg(user_id, sent.message_id)
 
 
 @router.callback_query(F.data == "manage_photos")
 async def manage_photos_handler(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    """Handler untuk masuk ke menu manajemen foto"""
     await render_manage_photos_ui(bot, callback.message.chat.id, callback.from_user.id, db)
     await callback.answer()
 
 
+# ==========================================
+# GANTI FOTO UTAMA
+# ==========================================
 @router.callback_query(F.data == "change_photo_main")
 async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
     """Memulai proses ganti foto utama"""
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]
+    ])
+    
     try:
         await callback.message.edit_caption(
-            caption="📸 <b>GANTI FOTO UTAMA</b>\n\nKirimkan foto baru sebagai foto utama profil Anda:",
+            caption="📸 <b>GANTI FOTO UTAMA</b>\n\nKirimkan foto baru untuk foto utama profil Anda:",
             reply_markup=kb,
             parse_mode="HTML"
         )
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"start_change_main edit failed: {e}")
+    
     await state.set_state(EditProfile.waiting_for_photo_main)
     await callback.answer()
 
@@ -537,94 +551,101 @@ async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
 @router.message(EditProfile.waiting_for_photo_main, F.photo)
 async def save_new_main(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     """Simpan foto utama baru"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Simpan foto ke database
+    await db.update_main_photo(user_id, message.photo[-1].file_id)
+    
+    # Hapus pesan user (biar chat bersih)
     try:
-        # Simpan foto
-        await db.update_main_photo(message.from_user.id, message.photo[-1].file_id)
-        
-        # Hapus pesan user
-        try:
-            await message.delete()
-        except:
-            pass
-        
-        # Kirim pesan sukses
-        await message.answer("✅ Foto utama berhasil diganti!", parse_mode="HTML")
-        
-        # Kembali ke menu manajemen foto
-        await render_manage_photos_ui(bot, message.chat.id, message.from_user.id, db)
-        
-    except Exception as e:
-        logging.error(f"Error save_new_main: {e}")
-        await message.answer("❌ Gagal mengganti foto. Silakan coba lagi.", parse_mode="HTML")
-    finally:
-        await state.clear()
+        await message.delete()
+    except:
+        pass
+    
+    # Kirim pesan sukses
+    await message.answer("✅ Foto utama berhasil diganti!", parse_mode="HTML")
+    
+    # Bersihkan state
+    await state.clear()
+    
+    # Kembali ke menu manajemen foto
+    await render_manage_photos_ui(bot, chat_id, user_id, db)
 
+
+# ==========================================
+# TAMBAH FOTO EXTRA
+# ==========================================
 @router.callback_query(F.data == "add_photo_extra")
 async def start_add_extra(callback: types.CallbackQuery, state: FSMContext):
     """Memulai proses tambah foto extra"""
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]
+    ])
+    
     try:
         await callback.message.edit_caption(
-            caption="📸 <b>TAMBAH FOTO EXTRA</b>\n\nKirimkan foto tambahan (maksimal 2 foto):\n\n<i>Foto akan ditampilkan di profilmu saat dilihat orang lain.</i>",
+            caption="📸 <b>TAMBAH FOTO EXTRA</b>\n\nKirimkan foto tambahan (maksimal 2 foto):",
             reply_markup=kb,
             parse_mode="HTML"
         )
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"start_add_extra edit failed: {e}")
+    
     await state.set_state(EditProfile.waiting_for_photo_extra)
     await callback.answer()
 
 
 @router.message(EditProfile.waiting_for_photo_extra, F.photo)
-@router.message(EditProfile.waiting_for_photo_extra, F.photo)
 async def save_new_extra(message: types.Message, db: DatabaseService, state: FSMContext, bot: Bot):
     """Simpan foto extra baru"""
-    try:
-        # Cek batas maksimal
-        user = await db.get_user(message.from_user.id)
-        extra = user.extra_photos or []
-        
-        if len(extra) >= 2:
-            await message.answer("⚠️ Maksimal 2 foto tambahan! Hapus beberapa foto terlebih dahulu.", parse_mode="HTML")
-            await state.clear()
-            return
-        
-        # Simpan foto
-        await db.manage_extra_photo(message.from_user.id, message.photo[-1].file_id, action='add')
-        
-        # Hapus pesan user
-        try:
-            await message.delete()
-        except:
-            pass
-        
-        # Kirim pesan sukses
-        await message.answer("✅ Foto tambahan berhasil disimpan!", parse_mode="HTML")
-        
-        # Kembali ke menu manajemen foto
-        await render_manage_photos_ui(bot, message.chat.id, message.from_user.id, db)
-        
-    except Exception as e:
-        logging.error(f"Error save_new_extra: {e}")
-        await message.answer("❌ Gagal menyimpan foto. Silakan coba lagi.", parse_mode="HTML")
-    finally:
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Cek batas maksimal foto extra
+    user = await db.get_user(user_id)
+    extra = user.extra_photos or []
+    
+    if len(extra) >= 2:
+        await message.answer("⚠️ Maksimal 2 foto tambahan! Hapus beberapa foto terlebih dahulu.", parse_mode="HTML")
         await state.clear()
+        return
+    
+    # Simpan foto ke database
+    await db.manage_extra_photo(user_id, message.photo[-1].file_id, action='add')
+    
+    # Hapus pesan user
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    # Kirim pesan sukses
+    await message.answer("✅ Foto tambahan berhasil disimpan!", parse_mode="HTML")
+    
+    # Bersihkan state
+    await state.clear()
+    
+    # Kembali ke menu manajemen foto
+    await render_manage_photos_ui(bot, chat_id, user_id, db)
 
+
+# ==========================================
+# HAPUS SEMUA FOTO EXTRA
+# ==========================================
 @router.callback_query(F.data == "clear_photo_extra")
 async def clear_photos(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     """Hapus semua foto extra"""
-    try:
-        async with db.session_factory() as session:
-            from services.database import User as UserTable
-            user = await session.get(UserTable, callback.from_user.id)
-            user.extra_photos = []
-            await session.commit()
-        
-        await callback.answer("🗑️ Semua foto extra dihapus!", show_alert=True)
-        
-        # Kembali ke menu manajemen foto
-        await render_manage_photos_ui(bot, callback.message.chat.id, callback.from_user.id, db)
-        
-    except Exception as e:
-        logging.error(f"Error clear_photos: {e}")
-        await callback.answer("❌ Gagal menghapus foto.", show_alert=True)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    
+    async with db.session_factory() as session:
+        from services.database import User as UserTable
+        user = await session.get(UserTable, user_id)
+        user.extra_photos = []
+        await session.commit()
+    
+    await callback.answer("🗑️ Semua foto extra dihapus!", show_alert=True)
+    
+    # Kembali ke menu manajemen foto
+    await render_manage_photos_ui(bot, chat_id, user_id, db)
