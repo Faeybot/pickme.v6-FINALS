@@ -56,7 +56,7 @@ class EditProfile(StatesGroup):
 
 
 # ==========================================
-# 2. RENDERER UTAMA: AKUN HUB
+# 2. RENDERER UTAMA: AKUN HUB (GERBANG)
 # ==========================================
 async def render_account_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None):
     """Menu utama Akun - Hanya gerbang ke sub-menu"""
@@ -282,7 +282,16 @@ async def render_status_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseSer
 @router.callback_query(F.data == "acc_edit_menu")
 async def handle_edit_menu(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     """Menu edit profil"""
-    user = await db.get_user(callback.from_user.id)
+    await render_edit_hub(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
+
+
+async def render_edit_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, callback_id: str = None):
+    """Tampilan menu edit profil"""
+    user = await db.get_user(user_id)
+    if not user:
+        return False
+    
+    await db.push_nav(user_id, "edit_profile")
     
     text = "✏️ <b>EDIT PROFIL</b>\n\nApa yang ingin diubah?"
     
@@ -295,28 +304,46 @@ async def handle_edit_menu(callback: types.CallbackQuery, db: DatabaseService, b
     
     media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
-    try:
-        await bot.edit_message_media(chat_id=callback.message.chat.id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
-    except:
-        pass
+    if callback_id:
+        try:
+            await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
+            await bot.answer_callback_query(callback_id)
+        except:
+            pass
+    else:
+        try:
+            sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
+        except:
+            pass
     
-    await callback.answer()
+    return True
 
 
 # ==========================================
-# 6. HANDLER: UPDATE BIO
+# 6. HANDLER: KEMBALI KE PROFIL (DARI EDIT)
+# ==========================================
+@router.callback_query(F.data == "menu_profile")
+async def back_to_profile(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    """Kembali ke halaman profil dari dalam edit profil"""
+    await render_full_profile_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
+
+
+# ==========================================
+# 7. HANDLER: UPDATE BIO
 # ==========================================
 @router.callback_query(F.data == "update_bio")
 async def ask_bio(callback: types.CallbackQuery, state: FSMContext):
     """Meminta input bio baru"""
     text = "📝 <b>UPDATE BIO</b>\n\nMasukkan Bio baru Anda (Maks 150 Karakter).\n<i>Ketik dan kirim pesan teks ke bot.</i>"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="menu_profile")]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="acc_edit_menu")]])
     
     try:
         await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
     except:
         pass
     await state.set_state(EditProfile.waiting_for_bio)
+    await callback.answer()
 
 
 @router.message(EditProfile.waiting_for_bio)
@@ -340,7 +367,7 @@ async def save_bio(message: types.Message, state: FSMContext, db: DatabaseServic
 
 
 # ==========================================
-# 7. HANDLER: UPDATE LOKASI
+# 8. HANDLER: UPDATE LOKASI
 # ==========================================
 @router.callback_query(F.data == "update_loc")
 async def ask_location_profile(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService, bot: Bot):
@@ -357,7 +384,7 @@ async def ask_location_profile(callback: types.CallbackQuery, state: FSMContext,
     if temp_row:
         kb_list.append(temp_row)
     
-    kb_list.append([InlineKeyboardButton(text="❌ Batal", callback_data="menu_profile")])
+    kb_list.append([InlineKeyboardButton(text="❌ Batal", callback_data="acc_edit_menu")])
     text = "📍 <b>UPDATE LOKASI PROFIL</b>\n\nPilih kota domisili Anda dari daftar, atau kirimkan koordinat GPS Anda agar lebih presisi."
 
     try:
@@ -441,7 +468,7 @@ async def handle_gps_profile(message: types.Message, db: DatabaseService, state:
 
 
 # ==========================================
-# 8. HANDLER: UPDATE MINAT
+# 9. HANDLER: UPDATE MINAT
 # ==========================================
 @router.callback_query(F.data == "update_interests")
 async def ask_interests(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext):
@@ -456,7 +483,7 @@ async def ask_interests(callback: types.CallbackQuery, db: DatabaseService, stat
         kb.append([InlineKeyboardButton(text=f"{prefix}{name}", callback_data=f"prof_int_{code}")])
     
     kb.append([InlineKeyboardButton(text="💾 SIMPAN", callback_data="prof_save_int")])
-    kb.append([InlineKeyboardButton(text="❌ Batal", callback_data="menu_profile")])
+    kb.append([InlineKeyboardButton(text="❌ Batal", callback_data="acc_edit_menu")])
     
     try:
         await callback.message.edit_caption(
@@ -467,6 +494,7 @@ async def ask_interests(callback: types.CallbackQuery, db: DatabaseService, stat
     except:
         pass
     await state.set_state(EditProfile.waiting_for_interests)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("prof_int_"), EditProfile.waiting_for_interests)
@@ -491,7 +519,7 @@ async def toggle_interest(callback: types.CallbackQuery, state: FSMContext):
         p = "✅ " if c in selected else ""
         kb.append([InlineKeyboardButton(text=f"{p}{n}", callback_data=f"prof_int_{c}")])
     kb.append([InlineKeyboardButton(text="💾 SIMPAN", callback_data="prof_save_int")])
-    kb.append([InlineKeyboardButton(text="❌ Batal", callback_data="menu_profile")])
+    kb.append([InlineKeyboardButton(text="❌ Batal", callback_data="acc_edit_menu")])
     
     try:
         await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
@@ -515,7 +543,7 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
 
 
 # ==========================================
-# 9. MANAJEMEN GALERI FOTO
+# 10. MANAJEMEN GALERI FOTO
 # ==========================================
 async def render_manage_photos_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService):
     """Menu manajemen galeri foto"""
