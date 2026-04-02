@@ -15,20 +15,45 @@ BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 
 
 # ==========================================
-# 1. CORE UI RENDERER (DASHBOARD UTAMA)
+# 1. FUNGSI BERSIHKAN LAYAR
 # ==========================================
-async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None, force_new: bool = False):
-    """Menampilkan dashboard utama dengan navigasi inline"""
+async def cleanup_chat_history(chat_id: int, user_id: int, bot: Bot, db: DatabaseService):
+    """Menghapus semua pesan yang ada di layar user saat ini"""
+    user = await db.get_user(user_id)
+    if not user:
+        return
     
-    # Cleanup ReplyKeyboard
+    # Hapus anchor message jika ada
+    if user.anchor_msg_id:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=user.anchor_msg_id)
+        except:
+            pass
+        await db.update_anchor_msg(user_id, None)
+    
+    # Hapus ReplyKeyboard jika ada
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id, temp_msg.message_id)
     except:
         pass
+
+
+# ==========================================
+# 2. CORE UI RENDERER (DASHBOARD UTAMA)
+# ==========================================
+async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None, force_new: bool = False):
+    """Menampilkan dashboard utama dengan navigasi inline - AUTO RESET & CLEANUP"""
     
+    # Force reset FSM
     if state:
-        await state.clear()
+        try:
+            await state.clear()
+        except:
+            pass
+    
+    # Bersihkan layar
+    await cleanup_chat_history(chat_id, user_id, bot, db)
     
     user = await db.get_user(user_id)
     if not user:
@@ -58,21 +83,13 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
     
     inline_kb = UIManager.get_dashboard_inline_kb(total_notif)
     
-    if callback_id and not force_new:
-        media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=dashboard_text, parse_mode="HTML")
-        try:
-            await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=inline_kb)
-            await bot.answer_callback_query(callback_id)
-            return True
-        except Exception:
-            pass
-
-    try:
-        sent_message = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=dashboard_text, reply_markup=inline_kb, parse_mode="HTML")
-        await db.update_anchor_msg(user_id, sent_message.message_id)
-    except Exception as e:
-        logging.error(f"Gagal mengirim Dashboard UI: {e}")
-
+    photo_to_use = user.photo_id if user.photo_id else BANNER_PHOTO_ID
+    media = InputMediaPhoto(media=photo_to_use, caption=dashboard_text, parse_mode="HTML")
+    
+    # Kirim pesan baru (layar sudah bersih)
+    sent_message = await bot.send_photo(chat_id=chat_id, photo=photo_to_use, caption=dashboard_text, reply_markup=inline_kb, parse_mode="HTML")
+    await db.update_anchor_msg(user_id, sent_message.message_id)
+    
     if callback_id:
         try:
             await bot.answer_callback_query(callback_id)
@@ -83,14 +100,23 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
 
 
 # ==========================================
-# 2. HANDLERS UTAMA (/start & Command)
+# 3. HANDLERS UTAMA (/start & Command)
 # ==========================================
 @router.message(CommandStart())
 @router.message(Command("dashboard"))
+@router.message(F.text == "🏠 Dashboard")
+@router.message(F.text == "📱 DASHBOARD UTAMA")
 async def command_start_handler(message: types.Message, command: CommandObject = None, db: DatabaseService = None, bot: Bot = None, state: FSMContext = None):
     args = command.args if command else None 
     user_id = message.from_user.id 
     chat_id = message.chat.id
+
+    # Force reset FSM
+    if state:
+        try:
+            await state.clear()
+        except:
+            pass
 
     try:
         await message.delete()
@@ -128,7 +154,7 @@ async def command_start_handler(message: types.Message, command: CommandObject =
 
 
 # ==========================================
-# 3. GERBANG KE MODUL LAIN (CALLBACK ROUTER)
+# 4. GERBANG KE MODUL LAIN (CALLBACK ROUTER)
 # ==========================================
 @router.callback_query(F.data == "check_join_start")
 async def verify_join_start(callback: types.CallbackQuery, bot: Bot, db: DatabaseService, state: FSMContext):
@@ -190,6 +216,9 @@ async def cb_menu_pricing(callback: types.CallbackQuery, db: DatabaseService, bo
     await render_pricing_main_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
 
 
+# ==========================================
+# 5. COMMAND VIA TELEGRAM MENU BIRU
+# ==========================================
 @router.message(Command("notifikasi"))
 async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
     try:
@@ -197,7 +226,7 @@ async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
     except:
         pass
     from handlers.notification import render_notification_hub
-    await render_notification_hub(message, db, bot, message.from_user.id)
+    await render_notification_hub(bot, message.chat.id, message.from_user.id, db)
 
 
 @router.message(Command("wallet"))
@@ -218,3 +247,13 @@ async def cmd_account(message: types.Message, db: DatabaseService, bot: Bot, sta
         pass
     from handlers.account import render_account_hub
     await render_account_hub(bot, message.chat.id, message.from_user.id, db, state)
+
+
+# ==========================================
+# 6. HANDLER UNTUK CALLBACK YANG TIDAK DIKENAL (DEBUG)
+# ==========================================
+@router.callback_query()
+async def handle_unknown_callback(callback: types.CallbackQuery):
+    """Handler untuk callback yang tidak dikenal"""
+    logging.warning(f"⚠️ Unknown callback: {callback.data} from user {callback.from_user.id}")
+    await callback.answer("⚠️ Menu sedang diperbaiki. Silakan coba lagi nanti.", show_alert=True)
