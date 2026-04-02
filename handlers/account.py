@@ -473,7 +473,7 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
 
 
 # ==========================================
-# MANAJEMEN GALERI FOTO (DIPERBAIKI)
+# MANAJEMEN GALERI FOTO (VERSI FINAL)
 # ==========================================
 
 async def render_manage_photos_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService):
@@ -531,6 +531,9 @@ async def manage_photos_handler(callback: types.CallbackQuery, db: DatabaseServi
 @router.callback_query(F.data == "change_photo_main")
 async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
     """Memulai proses ganti foto utama"""
+    # Bersihkan state lama terlebih dahulu
+    await state.clear()
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]
     ])
@@ -566,7 +569,7 @@ async def save_new_main(message: types.Message, state: FSMContext, db: DatabaseS
     # Kirim pesan sukses
     await message.answer("✅ Foto utama berhasil diganti!", parse_mode="HTML")
     
-    # Bersihkan state
+    # ⚠️ KRUSIAL: Hapus state
     await state.clear()
     
     # Kembali ke menu manajemen foto
@@ -579,6 +582,9 @@ async def save_new_main(message: types.Message, state: FSMContext, db: DatabaseS
 @router.callback_query(F.data == "add_photo_extra")
 async def start_add_extra(callback: types.CallbackQuery, state: FSMContext):
     """Memulai proses tambah foto extra"""
+    # Bersihkan state lama terlebih dahulu
+    await state.clear()
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]
     ])
@@ -623,7 +629,7 @@ async def save_new_extra(message: types.Message, db: DatabaseService, state: FSM
     # Kirim pesan sukses
     await message.answer("✅ Foto tambahan berhasil disimpan!", parse_mode="HTML")
     
-    # Bersihkan state
+    # ⚠️ KRUSIAL: Hapus state
     await state.clear()
     
     # Kembali ke menu manajemen foto
