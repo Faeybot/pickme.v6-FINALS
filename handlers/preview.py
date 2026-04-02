@@ -2,7 +2,7 @@ import os
 import html
 import logging
 from aiogram import Router, types, Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardRemove
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardRemove, InputMediaPhoto
 from services.database import DatabaseService, User
 from services.notification import NotificationService
 
@@ -67,7 +67,7 @@ async def render_preview_ui(bot: Bot, chat_id: int, viewer_id: int, target_id: i
         
         success = await db.use_unmask_anon_quota(viewer_id)
         if success:
-            # 💰 Berikan Reward ke Target
+            # 💰 Berikan Reward ke Target (+500 Poin kompensasi dibuka paksa)
             await db.add_points_with_log(target_id, 500, f"Unmask_Bonus_{viewer_id}_{target_id}")
             # 🔔 Trigger Notifikasi
             await notif_service.trigger_unmask(target_id, viewer_id)
@@ -76,8 +76,8 @@ async def render_preview_ui(bot: Bot, chat_id: int, viewer_id: int, target_id: i
     # ---------------------------------------------------
     # LOGIKA PUBLIC (INTIP PROFIL DARI FEED/BOOST) - VIP/VIP+
     # ---------------------------------------------------
-    elif context_source in ["public", "like", "view", "inbox", "match"]:
-        # Untuk like/view, tidak perlu potong kuota
+    elif context_source in ["public", "like", "view", "inbox", "match", "feed"]:
+        # Untuk like/view/match, tidak perlu potong kuota
         if context_source not in ["like", "view", "match"]:
             if not is_sultan:
                 return await render_upgrade_block_ui(bot, chat_id, target.full_name, viewer, ch_link)
@@ -92,7 +92,9 @@ async def render_preview_ui(bot: Bot, chat_id: int, viewer_id: int, target_id: i
             if is_new_view:
                 success = await db.use_unmask_quota(viewer_id)
                 if success:
+                    # 💰 Berikan Reward ke Target (+100 Poin)
                     await db.add_points_with_log(target_id, 100, f"Profil_Diintip_{viewer_id}_{target_id}")
+                    # 🔔 Trigger Notifikasi
                     await notif_service.trigger_view(target_id, viewer_id)
         
         # Untuk context_source "like" - beri notifikasi like
@@ -141,6 +143,14 @@ async def render_preview_ui(bot: Bot, chat_id: int, viewer_id: int, target_id: i
         f"<code>━━━━━━━━━━━━━━━━━━</code>"
     )
     
+    # Hitung jumlah foto yang akan ditampilkan
+    extra_photos = target.extra_photos or []
+    total_photos = 1 + len(extra_photos)
+    
+    # Tambahkan info jumlah foto ke caption
+    if total_photos > 1:
+        text_full += f"\n📸 <b>{total_photos} Foto</b> (geser untuk lihat semua)"
+    
     kb_buttons = []
     
     if is_unmasked_anon:
@@ -158,6 +168,9 @@ async def render_preview_ui(bot: Bot, chat_id: int, viewer_id: int, target_id: i
     elif context_source == "inbox":
         text_full = f"📥 <b>PENGIRIM PESAN INBOX</b>\n\n" + text_full
         kb_buttons.append([InlineKeyboardButton(text="💬 BALAS PESAN (+200 Poin)", callback_data=f"chat_{target_id}_inbox")])
+    elif context_source == "feed":
+        text_full = f"🎭 <b>POSTINGAN FEED</b>\n\n" + text_full
+        kb_buttons.append([InlineKeyboardButton(text="💬 KIRIM PESAN", callback_data=f"chat_{target_id}_public")])
     else:
         kb_buttons.append([InlineKeyboardButton(text="💌 KIRIM PESAN", callback_data=f"chat_{target_id}_public")])
     
@@ -167,14 +180,52 @@ async def render_preview_ui(bot: Bot, chat_id: int, viewer_id: int, target_id: i
         InlineKeyboardButton(text="🏠 Dashboard", callback_data="back_to_dashboard")
     ])
     
-    # Kirim sebagai pesan baru (karena berasal dari Deep Link)
-    await bot.send_photo(
-        chat_id=chat_id,
-        photo=target.photo_id,
-        caption=text_full,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
-        parse_mode="HTML"
-    )
+    # ==========================================
+    # TAMPILKAN FOTO (BERDASARKAN HAK AKSES)
+    # ==========================================
+    
+    # Kasus khusus UNMASK (VIP+ bongkar anonim) - tampilkan semua foto
+    if is_unmasked_anon or (is_sultan and context_source != "anon"):
+        # VIP/VIP+ atau sedang unmask: bisa lihat semua foto
+        media_group = []
+        
+        # Foto utama
+        media_group.append(InputMediaPhoto(media=target.photo_id, caption=text_full if len(media_group) == 0 else ""))
+        
+        # Foto tambahan (maksimal 2)
+        for photo in extra_photos[:2]:
+            media_group.append(InputMediaPhoto(media=photo, caption=""))
+        
+        # Kirim sebagai album (media group)
+        try:
+            await bot.send_media_group(chat_id=chat_id, media=media_group)
+            # Kirim tombol aksi terpisah (karena album tidak bisa pakai reply_markup)
+            await bot.send_message(
+                chat_id=chat_id,
+                text="👇 <i>Pilih aksi untuk profil ini:</i>",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            # Fallback jika send_media_group gagal
+            logging.error(f"Send media group failed: {e}")
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=target.photo_id,
+                caption=text_full,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+                parse_mode="HTML"
+            )
+    else:
+        # FREE user: hanya lihat 1 foto utama
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=target.photo_id,
+            caption=text_full,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+            parse_mode="HTML"
+        )
+    
     return True
 
 
