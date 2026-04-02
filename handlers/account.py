@@ -472,52 +472,90 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
     await render_full_profile_ui(bot, callback.message.chat.id, callback.from_user.id, db, None)
 
 # ==========================================
-# MANAJEMEN GALERI FOTO (TANPA FSM - PAKAI DICTIONARY)
+# GALERI FOTO & MANAJEMEN (VERSI BARU)
 # ==========================================
 
 # Dictionary untuk menyimpan user yang sedang upload
-waiting_for_photo = {}
+waiting_for_upload = {}
 
-async def show_manage_photos_menu(message: types.Message, db: DatabaseService):
-    """Menampilkan menu manajemen foto"""
-    user = await db.get_user(message.from_user.id)
+async def render_gallery_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, message_id: int = None):
+    """Menampilkan galeri foto dengan 3 slot: Profil, Album1, Album2"""
+    user = await db.get_user(user_id)
+    if not user:
+        return
+    
     extra = user.extra_photos or []
     
-    text = "📸 <b>MANAJEMEN GALERI FOTO</b>\n\nPilih aksi yang ingin Anda lakukan:"
+    # Tentukan status setiap slot
+    photo_main_status = "✅ Ada" if user.photo_id else "❌ Kosong"
+    photo_extra_1_status = "✅ Ada" if len(extra) >= 1 else "❌ Kosong"
+    photo_extra_2_status = "✅ Ada" if len(extra) >= 2 else "❌ Kosong"
     
+    text = (
+        "📸 <b>GALERI FOTO PICKME</b>\n"
+        f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n\n"
+        f"🖼️ <b>Foto Profil:</b> {photo_main_status}\n"
+        f"📷 <b>Foto Album 1:</b> {photo_extra_1_status}\n"
+        f"📷 <b>Foto Album 2:</b> {photo_extra_2_status}\n\n"
+        f"<i>Foto profil adalah foto utama yang terlihat di Discovery.\n"
+        f"Foto album akan ditampilkan saat user VIP/VIP+ melihat profilmu.</i>"
+    )
+    
+    # Buat tombol berdasarkan status
     kb = []
-    kb.append([InlineKeyboardButton(text="🖼️ GANTI FOTO UTAMA", callback_data="change_photo_main")])
     
-    if len(extra) < 2:
-        kb.append([InlineKeyboardButton(text="➕ TAMBAH FOTO EXTRA", callback_data="add_photo_extra")])
+    # Tombol ganti foto profil (selalu ada)
+    kb.append([InlineKeyboardButton(text="🖼️ GANTI FOTO PROFIL", callback_data="gallery_change_main")])
     
+    # Tombol untuk Album 1
+    if len(extra) >= 1:
+        kb.append([InlineKeyboardButton(text="🔄 GANTI FOTO ALBUM 1", callback_data="gallery_change_extra_1")])
+    else:
+        kb.append([InlineKeyboardButton(text="➕ UPLOAD FOTO ALBUM 1", callback_data="gallery_upload_extra_1")])
+    
+    # Tombol untuk Album 2
+    if len(extra) >= 2:
+        kb.append([InlineKeyboardButton(text="🔄 GANTI FOTO ALBUM 2", callback_data="gallery_change_extra_2")])
+    else:
+        kb.append([InlineKeyboardButton(text="➕ UPLOAD FOTO ALBUM 2", callback_data="gallery_upload_extra_2")])
+    
+    # Tombol hapus semua album (jika ada)
     if extra:
-        kb.append([InlineKeyboardButton(text="🗑️ HAPUS SEMUA FOTO EXTRA", callback_data="clear_photo_extra")])
+        kb.append([InlineKeyboardButton(text="🗑️ HAPUS SEMUA FOTO ALBUM", callback_data="gallery_clear_all")])
     
-    kb.append([InlineKeyboardButton(text="🔙 KEMBALI KE PROFIL", callback_data="menu_profile")])
+    kb.append([InlineKeyboardButton(text="⬅️ KEMBALI KE PROFIL", callback_data="menu_profile")])
     
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+    media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
+    
+    if message_id:
+        try:
+            await bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=media, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+        except:
+            # Jika edit gagal, kirim pesan baru
+            sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
+    else:
+        sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+        await db.update_anchor_msg(user_id, sent.message_id)
 
 
 @router.callback_query(F.data == "manage_photos")
-async def manage_photos_handler(callback: types.CallbackQuery, db: DatabaseService):
-    """Handler masuk ke menu manajemen foto"""
-    await show_manage_photos_menu(callback.message, db)
+async def open_gallery(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    """Membuka galeri foto"""
+    await render_gallery_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.message.message_id)
     await callback.answer()
 
 
 # ==========================================
-# GANTI FOTO UTAMA
+# UPLOAD/GANTI FOTO PROFIL
 # ==========================================
-@router.callback_query(F.data == "change_photo_main")
-async def start_change_main(callback: types.CallbackQuery):
+@router.callback_query(F.data == "gallery_change_main")
+async def change_main_photo(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    
-    # Tandai user sedang menunggu upload foto utama
-    waiting_for_photo[user_id] = "main"
+    waiting_for_upload[user_id] = "main"
     
     await callback.message.answer(
-        "📸 <b>GANTI FOTO UTAMA</b>\n\n"
+        "📸 <b>GANTI FOTO PROFIL</b>\n\n"
         "Silakan kirim foto baru untuk foto profil Anda.\n\n"
         "<i>Kirim foto sekarang...</i>",
         parse_mode="HTML"
@@ -526,18 +564,67 @@ async def start_change_main(callback: types.CallbackQuery):
 
 
 # ==========================================
-# TAMBAH FOTO EXTRA
+# UPLOAD FOTO ALBUM 1 (jika kosong)
 # ==========================================
-@router.callback_query(F.data == "add_photo_extra")
-async def start_add_extra(callback: types.CallbackQuery):
+@router.callback_query(F.data == "gallery_upload_extra_1")
+async def upload_extra_1(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    
-    # Tandai user sedang menunggu upload foto extra
-    waiting_for_photo[user_id] = "extra"
+    waiting_for_upload[user_id] = "extra_1"
     
     await callback.message.answer(
-        "📸 <b>TAMBAH FOTO EXTRA</b>\n\n"
-        "Silakan kirim foto tambahan (maksimal 2 foto).\n\n"
+        "📸 <b>UPLOAD FOTO ALBUM 1</b>\n\n"
+        "Silakan kirim foto untuk album 1.\n\n"
+        "<i>Kirim foto sekarang...</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# ==========================================
+# GANTI FOTO ALBUM 1 (jika sudah ada)
+# ==========================================
+@router.callback_query(F.data == "gallery_change_extra_1")
+async def change_extra_1(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    waiting_for_upload[user_id] = "extra_1"
+    
+    await callback.message.answer(
+        "📸 <b>GANTI FOTO ALBUM 1</b>\n\n"
+        "Silakan kirim foto baru untuk mengganti album 1.\n\n"
+        "<i>Kirim foto sekarang...</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# ==========================================
+# UPLOAD FOTO ALBUM 2 (jika kosong)
+# ==========================================
+@router.callback_query(F.data == "gallery_upload_extra_2")
+async def upload_extra_2(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    waiting_for_upload[user_id] = "extra_2"
+    
+    await callback.message.answer(
+        "📸 <b>UPLOAD FOTO ALBUM 2</b>\n\n"
+        "Silakan kirim foto untuk album 2.\n\n"
+        "<i>Kirim foto sekarang...</i>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+# ==========================================
+# GANTI FOTO ALBUM 2 (jika sudah ada)
+# ==========================================
+@router.callback_query(F.data == "gallery_change_extra_2")
+async def change_extra_2(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    waiting_for_upload[user_id] = "extra_2"
+    
+    await callback.message.answer(
+        "📸 <b>GANTI FOTO ALBUM 2</b>\n\n"
+        "Silakan kirim foto baru untuk mengganti album 2.\n\n"
         "<i>Kirim foto sekarang...</i>",
         parse_mode="HTML"
     )
@@ -548,35 +635,67 @@ async def start_add_extra(callback: types.CallbackQuery):
 # HANDLER UNTUK SEMUA FOTO YANG DIKIRIM
 # ==========================================
 @router.message(F.photo)
-async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bot):
-    """Handler untuk semua foto yang dikirim"""
+async def handle_gallery_upload(message: types.Message, db: DatabaseService, bot: Bot):
+    """Menangani semua upload foto dari galeri"""
     user_id = message.from_user.id
-    
-    # Cek apakah user sedang dalam mode upload
-    action = waiting_for_photo.get(user_id)
+    action = waiting_for_upload.get(user_id)
     
     if not action:
-        # Tidak ada aksi, abaikan
+        # Tidak ada session upload, abaikan
         return
     
+    photo_id = message.photo[-1].file_id
+    
     if action == "main":
-        # Ganti foto utama
-        await db.update_main_photo(user_id, message.photo[-1].file_id)
-        await message.answer("✅ Foto utama berhasil diganti!", parse_mode="HTML")
+        # Ganti foto profil
+        await db.update_main_photo(user_id, photo_id)
+        await message.answer("✅ <b>Foto profil berhasil diperbarui!</b>", parse_mode="HTML")
         
-    elif action == "extra":
-        # Tambah foto extra
+    elif action == "extra_1":
+        # Upload/ganti album 1
         user = await db.get_user(user_id)
-        extra = user.extra_photos or []
+        extra = list(user.extra_photos or [])
+        
+        if len(extra) >= 1:
+            # Ganti yang sudah ada
+            extra[0] = photo_id
+        else:
+            # Tambah baru
+            extra.append(photo_id)
+        
+        async with db.session_factory() as session:
+            u = await session.get(User, user_id)
+            u.extra_photos = extra
+            await session.commit()
+        
+        await message.answer("✅ <b>Foto album 1 berhasil diperbarui!</b>", parse_mode="HTML")
+        
+    elif action == "extra_2":
+        # Upload/ganti album 2
+        user = await db.get_user(user_id)
+        extra = list(user.extra_photos or [])
         
         if len(extra) >= 2:
-            await message.answer("⚠️ Maksimal 2 foto tambahan! Hapus beberapa foto terlebih dahulu.", parse_mode="HTML")
+            # Ganti yang sudah ada
+            extra[1] = photo_id
         else:
-            await db.manage_extra_photo(user_id, message.photo[-1].file_id, action='add')
-            await message.answer("✅ Foto tambahan berhasil disimpan!", parse_mode="HTML")
+            # Tambah baru (mungkin album 1 belum ada)
+            while len(extra) < 1:
+                extra.append(None)
+            extra.append(photo_id)
+        
+        # Bersihkan None
+        extra = [x for x in extra if x is not None]
+        
+        async with db.session_factory() as session:
+            u = await session.get(User, user_id)
+            u.extra_photos = extra
+            await session.commit()
+        
+        await message.answer("✅ <b>Foto album 2 berhasil diperbarui!</b>", parse_mode="HTML")
     
-    # Hapus tanda setelah selesai
-    waiting_for_photo.pop(user_id, None)
+    # Hapus session upload
+    waiting_for_upload.pop(user_id, None)
     
     # Hapus pesan user (biar chat bersih)
     try:
@@ -584,22 +703,30 @@ async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bo
     except:
         pass
     
-    # Kembali ke menu manajemen foto
-    await show_manage_photos_menu(message, db)
+    # Tunggu 1.5 detik agar user membaca pesan sukses
+    await asyncio.sleep(1.5)
+    
+    # Kembali ke galeri foto
+    await render_gallery_ui(bot, message.chat.id, user_id, db)
 
 
 # ==========================================
-# HAPUS SEMUA FOTO EXTRA
+# HAPUS SEMUA FOTO ALBUM
 # ==========================================
-@router.callback_query(F.data == "clear_photo_extra")
-async def clear_photos(callback: types.CallbackQuery, db: DatabaseService):
-    """Hapus semua foto extra"""
+@router.callback_query(F.data == "gallery_clear_all")
+async def clear_all_album(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    """Menghapus semua foto album"""
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    
     async with db.session_factory() as session:
         from services.database import User as UserTable
-        user = await session.get(UserTable, callback.from_user.id)
+        user = await session.get(UserTable, user_id)
         if user:
             user.extra_photos = []
             await session.commit()
     
-    await callback.answer("🗑️ Semua foto extra dihapus!", show_alert=True)
-    await show_manage_photos_menu(callback.message, db)
+    await callback.answer("🗑️ Semua foto album dihapus!", show_alert=True)
+    
+    # Refresh galeri
+    await render_gallery_ui(bot, chat_id, user_id, db, callback.message.message_id)
