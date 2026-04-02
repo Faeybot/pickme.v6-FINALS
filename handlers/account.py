@@ -491,13 +491,6 @@ async def render_manage_photos_ui(bot: Bot, chat_id: int, user_id: int, db: Data
     else:
         caption_text += "<i>Belum ada foto tambahan.</i>\n\n"
     
-    caption_text += f"📷 <b>Foto Tambahan ({len(extra)}/2):</b>\n"
-        for i, photo in enumerate(extra, 1):
-            caption_text += f"   {i}. Foto {i}\n"
-        caption_text += "\n"
-    else:
-        caption_text += "<i>Belum ada foto tambahan.</i>\n\n"
-    
     caption_text += "Sesuaikan foto-foto terbaikmu agar lebih memikat di Discovery.\n\n"
     caption_text += "⬇️ <i>Pilih aksi di bawah:</i>"
     
