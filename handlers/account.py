@@ -735,4 +735,4 @@ async def clear_all_album(callback: types.CallbackQuery, db: DatabaseService, bo
     await callback.answer("🗑️ Semua foto album dihapus!", show_alert=True)
     
     # Refresh galeri
-    await render_gallery_ui(bot, chat_id, user_id, db, callback.message.message_id
+    await render_gallery_ui(bot, chat_id, user_id, db, callback.message.message_id)
