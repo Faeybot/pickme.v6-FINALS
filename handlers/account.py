@@ -121,7 +121,7 @@ async def render_account_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseS
 
 
 # ==========================================
-# 3. HANDLER: LIHAT & EDIT PROFIL
+# 3. HANDLER: LIHAT & EDIT PROFIL (PROFIL LENGKAP)
 # ==========================================
 @router.callback_query(F.data == "acc_view_profile")
 async def handle_view_profile(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
@@ -200,80 +200,13 @@ async def render_full_profile_ui(bot: Bot, chat_id: int, user_id: int, db: Datab
 
 
 # ==========================================
-# 4. HANDLER: CEK STATUS & KUOTA
+# 4. HANDLER: CEK STATUS & KUOTA (ALIHKAN KE STATUS.PY)
 # ==========================================
 @router.callback_query(F.data == "acc_view_status")
 async def handle_view_status(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    """Menampilkan status kuota user"""
+    """Menampilkan status kuota user - DIALIHKAN KE status.py"""
+    from handlers.status import render_status_ui
     await render_status_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
-
-
-async def render_status_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, callback_id: str = None):
-    """Tampilan status kuota"""
-    
-    user = await db.get_user(user_id)
-    if not user:
-        return False
-    
-    await db.push_nav(user_id, "status")
-    
-    # Tentukan kasta dan kuota
-    if user.is_vip_plus:
-        kasta = "💎 VIP+"
-        swipe_limit = 50
-    elif user.is_vip:
-        kasta = "🌟 VIP"
-        swipe_limit = 30
-    elif user.is_premium:
-        kasta = "🎭 PREMIUM"
-        swipe_limit = 20
-    else:
-        kasta = "👤 FREE"
-        swipe_limit = 10
-    
-    swipe_left = max(0, swipe_limit - user.daily_swipe_count)
-    total_boost = user.paid_boost_balance + user.weekly_free_boost
-    
-    text = (
-        f"📊 <b>STATUS AKUN & KUOTA</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-        f"👑 <b>Status Akun:</b> {kasta}\n\n"
-        f"📑 <b>Sisa Kuota Harian</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
-        f"🔍 Swipe Jodoh: <b>{swipe_left} / {swipe_limit}</b>\n"
-        f"👀 Buka Profil: <b>{user.daily_open_profile_quota}</b>\n"
-        f"🎭 Bongkar Anonim: <b>{user.daily_unmask_quota}</b>\n"
-        f"💬 Kirim Pesan: <b>{user.daily_message_quota}</b>\n"
-        f"📝 Post Teks Feed: <b>{user.daily_feed_text_quota}</b>\n"
-        f"📸 Post Foto Feed: <b>{user.daily_feed_photo_quota}</b>\n"
-        f"<i>(Reset setiap pukul 00:00 WIB)</i>\n\n"
-        f"🚀 <b>Tiket Boost</b>\n"
-        f"🎁 Boost Gratis: <b>{user.weekly_free_boost}</b>\n"
-        f"🎫 Boost Berbayar: <b>{user.paid_boost_balance}</b>\n"
-        f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>"
-    )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 UPGRADE KASTA", callback_data="menu_pricing")],
-        [InlineKeyboardButton(text="⬅️ Kembali ke Akun Saya", callback_data="menu_account")]
-    ])
-    
-    media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
-    
-    if callback_id:
-        try:
-            await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
-            await bot.answer_callback_query(callback_id)
-        except:
-            pass
-    else:
-        try:
-            sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-            await db.update_anchor_msg(user_id, sent.message_id)
-        except Exception as e:
-            logging.error(f"Gagal render status UI: {e}")
-    
-    return True
 
 
 # ==========================================
@@ -350,7 +283,8 @@ async def ask_bio(callback: types.CallbackQuery, state: FSMContext):
 async def save_bio(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     """Simpan bio baru"""
     if len(message.text) > 150:
-        return await message.answer("⚠️ Terlalu panjang! Maks 150 Karakter.")
+        await message.answer("⚠️ Terlalu panjang! Maks 150 Karakter.")
+        return
     
     async with db.session_factory() as session:
         from services.database import User as UserTable
@@ -362,7 +296,9 @@ async def save_bio(message: types.Message, state: FSMContext, db: DatabaseServic
         await message.delete()
     except:
         pass
+    
     await state.clear()
+    await message.answer("✅ Bio berhasil diperbarui!", parse_mode="HTML")
     await render_full_profile_ui(bot, message.chat.id, message.from_user.id, db, None)
 
 
@@ -457,13 +393,7 @@ async def handle_gps_profile(message: types.Message, db: DatabaseService, state:
         pass
     
     await state.clear()
-    msg_sukses = await message.answer("✅ Lokasi GPS tersimpan!")
-    await asyncio.sleep(1)
-    try:
-        await msg_sukses.delete()
-    except:
-        pass
-    
+    await message.answer("✅ Lokasi GPS tersimpan!", parse_mode="HTML")
     await render_full_profile_ui(bot, message.chat.id, message.from_user.id, db, None)
 
 
@@ -543,12 +473,33 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
 
 
 # ==========================================
-# 10. MANAJEMEN GALERI FOTO
+# 10. MANAJEMEN GALERI FOTO (DIPERBAIKI)
 # ==========================================
 async def render_manage_photos_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService):
     """Menu manajemen galeri foto"""
     user = await db.get_user(user_id)
     extra = user.extra_photos or []
+    
+    # Buat preview foto-foto yang ada
+    caption_text = "📸 <b>MANAJEMEN GALERI FOTO</b>\n\n"
+    
+    if extra:
+        caption_text += f"📷 <b>Foto Tambahan ({len(extra)}/2):</b>\n"
+        for i, photo in enumerate(extra, 1):
+            caption_text += f"   {i}. Foto {i}\n"
+        caption_text += "\n"
+    else:
+        caption_text += "<i>Belum ada foto tambahan.</i>\n\n"
+    
+    caption_text += f"📷 <b>Foto Tambahan ({len(extra)}/2):</b>\n"
+        for i, photo in enumerate(extra, 1):
+            caption_text += f"   {i}. Foto {i}\n"
+        caption_text += "\n"
+    else:
+        caption_text += "<i>Belum ada foto tambahan.</i>\n\n"
+    
+    caption_text += "Sesuaikan foto-foto terbaikmu agar lebih memikat di Discovery.\n\n"
+    caption_text += "⬇️ <i>Pilih aksi di bawah:</i>"
     
     kb = [
         [InlineKeyboardButton(text="🖼️ GANTI FOTO UTAMA", callback_data="change_photo_main")]
@@ -559,7 +510,6 @@ async def render_manage_photos_ui(bot: Bot, chat_id: int, user_id: int, db: Data
         kb.append([InlineKeyboardButton(text="🗑️ HAPUS SEMUA FOTO EXTRA", callback_data="clear_photo_extra")])
     kb.append([InlineKeyboardButton(text="⬅️ Kembali ke Profil Saya", callback_data="menu_profile")])
     
-    caption_text = "📸 <b>MANAJEMEN GALERI FOTO</b>\n\nSesuaikan foto-foto terbaikmu agar lebih memikat di Discovery."
     media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=caption_text, parse_mode="HTML")
 
     try:
@@ -581,7 +531,7 @@ async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]])
     try:
         await callback.message.edit_caption(
-            caption="📸 Kirimkan <b>1 Foto Utama</b> yang baru (Kirim gambar ke bot):",
+            caption="📸 <b>GANTI FOTO UTAMA</b>\n\nKirimkan foto baru sebagai foto utama profil Anda:",
             reply_markup=kb,
             parse_mode="HTML"
         )
@@ -592,14 +542,17 @@ async def start_change_main(callback: types.CallbackQuery, state: FSMContext):
 
 
 @router.message(EditProfile.waiting_for_photo_main, F.photo)
-async def save_new_main(message: types.Message, db: DatabaseService, state: FSMContext, bot: Bot):
+async def save_new_main(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     """Simpan foto utama baru"""
     await db.update_main_photo(message.from_user.id, message.photo[-1].file_id)
     await state.clear()
+    
     try:
         await message.delete()
     except:
         pass
+    
+    await message.answer("✅ Foto utama berhasil diganti!", parse_mode="HTML")
     await render_manage_photos_ui(bot, message.chat.id, message.from_user.id, db)
 
 
@@ -609,7 +562,7 @@ async def start_add_extra(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="manage_photos")]])
     try:
         await callback.message.edit_caption(
-            caption="📸 Kirimkan <b>Foto Tambahan</b> Anda (Maksimal 2):",
+            caption="📸 <b>TAMBAH FOTO EXTRA</b>\n\nKirimkan foto tambahan (maksimal 2 foto):\n\n<i>Foto akan ditampilkan di profilmu saat dilihat orang lain.</i>",
             reply_markup=kb,
             parse_mode="HTML"
         )
@@ -622,12 +575,23 @@ async def start_add_extra(callback: types.CallbackQuery, state: FSMContext):
 @router.message(EditProfile.waiting_for_photo_extra, F.photo)
 async def save_new_extra(message: types.Message, db: DatabaseService, state: FSMContext, bot: Bot):
     """Simpan foto extra baru"""
+    user = await db.get_user(message.from_user.id)
+    extra = user.extra_photos or []
+    
+    if len(extra) >= 2:
+        await message.answer("⚠️ Maksimal 2 foto tambahan! Hapus beberapa foto terlebih dahulu.", parse_mode="HTML")
+        await state.clear()
+        return
+    
     await db.manage_extra_photo(message.from_user.id, message.photo[-1].file_id, action='add')
     await state.clear()
+    
     try:
         await message.delete()
     except:
         pass
+    
+    await message.answer("✅ Foto tambahan berhasil disimpan!", parse_mode="HTML")
     await render_manage_photos_ui(bot, message.chat.id, message.from_user.id, db)
 
 
@@ -639,5 +603,5 @@ async def clear_photos(callback: types.CallbackQuery, db: DatabaseService, bot: 
         user = await session.get(UserTable, callback.from_user.id)
         user.extra_photos = []
         await session.commit()
-    await callback.answer("🗑️ Foto Extra dihapus!", show_alert=True)
+    await callback.answer("🗑️ Semua foto extra dihapus!", show_alert=True)
     await render_manage_photos_ui(bot, callback.message.chat.id, callback.from_user.id, db)
