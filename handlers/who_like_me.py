@@ -1,14 +1,24 @@
 import os
 import math
 from aiogram import Router, F, types, Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardRemove
 from services.database import DatabaseService
 
 router = Router()
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 ITEMS_PER_PAGE = 5
 
+
 async def render_who_like_me_list(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, page: int = 0, message_id: int = None):
+    """Menampilkan daftar orang yang menyukai profil"""
+    
+    # Cleanup ReplyKeyboard
+    try:
+        temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
+        await bot.delete_message(chat_id, temp_msg.message_id)
+    except:
+        pass
+    
     likers = await db.get_interaction_list(user_id, "LIKE", limit=50)
     user = await db.get_user(user_id)
     
@@ -24,31 +34,49 @@ async def render_who_like_me_list(bot: Bot, chat_id: int, user_id: int, db: Data
         current_likers = likers[start_idx:end_idx]
         
         if user.is_vip_plus:
-            text_content += f"Ada <b>{len(likers)}</b> orang yang menyukaimu! Silakan cek profil mereka:\n"
+            text_content += f"Ada <b>{len(likers)}</b> orang yang menyukaimu! Silakan cek profil mereka:\n\n"
         else:
-            text_content += f"Ada <b>{len(likers)}</b> orang yang menyukaimu!\n🔒 <i>Upgrade ke VIP+ untuk membuka profil mereka dan langsung Match!</i>\n"
-            
+            text_content += f"Ada <b>{len(likers)}</b> orang yang menyukaimu!\n🔒 <i>Upgrade ke VIP+ untuk membuka profil mereka dan langsung Match!</i>\n\n"
+        
         kb_buttons = []
         for person in current_likers:
-            # NAMA DITAMPILKAN JELAS, TIDAK DISENSOR
-            btn_text = f"👤 {person.full_name}, {person.age}th - {person.location_name}"
-            kb_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"wlm_view_{person.id}_{page}")])
-            
+            if user.is_vip_plus:
+                btn_text = f"👤 {person.full_name}, {person.age}th - {person.location_name}"
+                kb_buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"wlm_view_{person.id}_{page}")])
+            else:
+                btn_text = f"🔒 {person.full_name[:3]}***, {person.age}th - {person.location_name}"
+                kb_buttons.append([InlineKeyboardButton(text=btn_text, callback_data="menu_pricing")])
+        
+        # Navigasi Paginasi
         nav_row = []
-        if page > 0: nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"wlm_page_{page-1}"))
-        if page < total_pages - 1: nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"wlm_page_{page+1}"))
-        if nav_row: kb_buttons.append(nav_row)
-            
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"wlm_page_{page-1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"wlm_page_{page+1}"))
+        if nav_row:
+            kb_buttons.append(nav_row)
+        
         kb_buttons.append([InlineKeyboardButton(text="⬅️ Kembali ke Notifikasi", callback_data="menu_notifications")])
         kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
-
+    
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text_content, parse_mode="HTML")
     
     if message_id:
-        try: await bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=media, reply_markup=kb)
-        except: pass
+        try:
+            await bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=media, reply_markup=kb)
+        except Exception:
+            pass
     else:
-        await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text_content, reply_markup=kb, parse_mode="HTML")
+        user_db = await db.get_user(user_id)
+        if user_db and user_db.anchor_msg_id:
+            try:
+                await bot.edit_message_media(chat_id=chat_id, message_id=user_db.anchor_msg_id, media=media, reply_markup=kb)
+            except:
+                sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text_content, reply_markup=kb, parse_mode="HTML")
+                await db.update_anchor_msg(user_id, sent.message_id)
+        else:
+            sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text_content, reply_markup=kb, parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
 
 
 @router.callback_query(F.data == "list_who_like_me")
@@ -57,13 +85,17 @@ async def handle_list_likers(callback: types.CallbackQuery, db: DatabaseService,
     await render_who_like_me_list(bot, callback.message.chat.id, callback.from_user.id, db, page=0, message_id=callback.message.message_id)
     await callback.answer()
 
+
 @router.callback_query(F.data.startswith("wlm_page_"))
 async def handle_wlm_page(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     page = int(callback.data.split("_")[2])
     await render_who_like_me_list(bot, callback.message.chat.id, callback.from_user.id, db, page=page, message_id=callback.message.message_id)
     await callback.answer()
 
-# === GATEKEEPER VIP+ & RENDER PROFIL ===
+
+# ==========================================
+# GATEKEEPER VIP+ & RENDER PROFIL
+# ==========================================
 @router.callback_query(F.data.startswith("wlm_view_"))
 async def view_liker_profile(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     user = await db.get_user(callback.from_user.id)
@@ -71,19 +103,31 @@ async def view_liker_profile(callback: types.CallbackQuery, db: DatabaseService,
     # 🛑 JEBAKAN PAYWALL
     if not user.is_vip_plus:
         await callback.answer("🔒 AKSES DITOLAK: Fitur ini eksklusif untuk VIP+! Silakan Upgrade.", show_alert=True)
-        from handlers.pricing import render_pricing_ui
-        return await render_pricing_ui(bot, callback.message.chat.id, callback.from_user.id, db)
-        
+        from handlers.pricing import render_pricing_main_ui
+        return await render_pricing_main_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
+    
     _, _, target_id_str, page_str = callback.data.split("_")
     target_id, page = int(target_id_str), int(page_str)
     
     target = await db.get_user(target_id)
-    if not target: return await callback.answer("Pengguna tidak ditemukan.", show_alert=True)
-        
+    if not target:
+        return await callback.answer("Pengguna tidak ditemukan.", show_alert=True)
+    
+    # Tentukan kasta target
+    if target.is_vip_plus:
+        kasta = "💎 VIP+"
+    elif target.is_vip:
+        kasta = "🌟 VIP"
+    elif target.is_premium:
+        kasta = "🎭 PREMIUM"
+    else:
+        kasta = "👤 FREE"
+    
     text = (
         f"❤️ <b>DIA MENYUKAIMU!</b>\n"
         f"<code>━━━━━━━━━━━━━━━━━━</code>\n"
         f"👤 <b>{target.full_name.upper()}, {target.age}</b>\n"
+        f"👑 Kasta: {kasta}\n"
         f"📍 {target.location_name}\n"
         f"🔥 <b>Minat:</b> {target.interests or '-'}\n"
         f"📝 <blockquote>{target.bio or 'Tidak ada bio.'}</blockquote>\n"
@@ -101,34 +145,41 @@ async def view_liker_profile(callback: types.CallbackQuery, db: DatabaseService,
     ])
     
     media = InputMediaPhoto(media=target.photo_id, caption=text, parse_mode="HTML")
-    try: await callback.message.edit_media(media=media, reply_markup=kb)
-    except: pass
+    try:
+        await callback.message.edit_media(media=media, reply_markup=kb)
+    except:
+        pass
     await callback.answer()
 
-# === EKSEKUSI MATCH DARI WLM ===
+
+# ==========================================
+# EKSEKUSI MATCH DARI WLM
+# ==========================================
 @router.callback_query(F.data.startswith("wlm_action_"))
 async def handle_wlm_action(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     parts = callback.data.split("_")
-    action = parts[2] # 'like' atau 'skip'
+    action = parts[2]  # 'like' atau 'skip'
     target_id = int(parts[3])
     page = int(parts[4])
     
     user_id = callback.from_user.id
     
     if action == "like":
-        # Eksekusi logika Match di database (menghapus notif LIKE, membuat notif MATCH)
+        # Eksekusi logika Match di database
         is_matched = await db.process_match_logic(user_id, target_id)
         if is_matched:
             await callback.answer("🎉 IT'S A MATCH! Kalian sekarang bisa saling berkirim pesan.", show_alert=True)
-            try: await bot.send_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nSeseorang baru saja membalas Like-mu! Cek menu Match sekarang.", parse_mode="HTML")
-            except: pass
+            try:
+                await bot.send_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nSeseorang baru saja membalas Like-mu! Cek menu Match sekarang.", parse_mode="HTML")
+            except:
+                pass
         else:
-            await callback.answer("Match diproses.", show_alert=False)
-            
+            await callback.answer("❤️ Like terkirim!", show_alert=False)
+    
     elif action == "skip":
         # Hapus Notifikasi LIKE agar tidak muncul lagi di list
         await db.remove_interaction(user_id, target_id, "LIKE")
-        await callback.answer("Profil dilewati.", show_alert=False)
-        
+        await callback.answer("👎 Profil dilewati.", show_alert=False)
+    
     # Kembalikan ke daftar setelah aksi
     await render_who_like_me_list(bot, callback.message.chat.id, user_id, db, page=page, message_id=callback.message.message_id)
