@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+ehfrom aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 class UIManager:
     @staticmethod
@@ -46,9 +46,10 @@ class UIManager:
     def get_finance_center_kb() -> InlineKeyboardMarkup:
         """ Sub-menu untuk Keuangan (WD & Referral) """
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💰 Withdraw Poin", callback_data="menu_withdraw")],
-            [InlineKeyboardButton(text="🎁 Cek Referral", callback_data="menu_referral")],
+            [InlineKeyboardButton(text="💰 Withdraw Poin", callback_data="wallet_withdraw")],  # ← UBAH
+            [InlineKeyboardButton(text="🎁 Cek Referral", callback_data="wallet_referral")],   # ← UBAH
             [InlineKeyboardButton(text="⬅️ Kembali ke Dashboard", callback_data="back_to_dashboard")]
+
         ])
 
     @staticmethod
