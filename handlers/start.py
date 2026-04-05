@@ -17,7 +17,7 @@ BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 # 1. CORE UI RENDERER (DASHBOARD UTAMA)
 # ==========================================
 async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None, force_new: bool = False):
-    if state: await state.clear()
+    # ⚠️ TIDAK ADA state.clear() - biarkan user melanjutkan aktivitasnya
     
     user = await db.get_user(user_id)
     if not user: return False
@@ -38,6 +38,7 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
     
     inline_kb = UIManager.get_dashboard_inline_kb(total_notif)
     
+    # Coba edit jika ada anchor
     if callback_id and not force_new:
         media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=dashboard_text, parse_mode="HTML")
         try:
@@ -47,6 +48,7 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
         except Exception:
             pass
 
+    # Fallback: kirim baru
     try:
         sent_message = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=dashboard_text, reply_markup=inline_kb, parse_mode="HTML")
         await db.update_anchor_msg(user_id, sent_message.message_id)
@@ -64,7 +66,7 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
 # ==========================================
 async def render_notification_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
     unreads = await db.get_all_unread_counts(user_id)
-    text = "🔔 <b>PUSAT NOTIFIKASI</b>\n\nPantau semua interaksi profilmu di sini. Jangan biarkan pesan atau <i>match</i> barumu menunggu terlalu lama!"
+    text = "🔔 <b>PUSAT NOTIFIKASI</b>\n\nPantau semua interaksi profilmu di sini."
     kb = UIManager.get_notification_center_kb(unreads)
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
@@ -76,7 +78,7 @@ async def render_notification_hub(message_or_callback, db: DatabaseService, bot:
 
 async def render_finance_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
     user = await db.get_user(user_id)
-    text = f"💳 <b>DOMPET & REWARD</b>\n\nSaldo Poin: <b>{user.poin_balance:,} Poin</b>\n\nBagikan <i>link</i> referralmu untuk mendapatkan koin tambahan, atau cairkan poinmu menjadi uang tunai (Syarat: Status Premium)."
+    text = f"💳 <b>DOMPET & REWARD</b>\n\nSaldo Poin: <b>{user.poin_balance:,} Poin</b>"
     kb = UIManager.get_finance_center_kb()
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
@@ -128,12 +130,10 @@ async def command_start_handler(message: types.Message, command: CommandObject =
 # ==========================================
 # HANDLER UNTUK SEMUA COMMAND MENU BIRU
 # ==========================================
-
 @router.message(Command("feed"))
 async def cmd_feed(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
     try: await message.delete()
     except: pass
-    if state: await state.clear()
     from handlers.feed import render_feed_ui
     await render_feed_ui(bot, message.chat.id, message.from_user.id, db, state)
 
@@ -142,7 +142,6 @@ async def cmd_feed(message: types.Message, db: DatabaseService, bot: Bot, state:
 async def cmd_discovery(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
     try: await message.delete()
     except: pass
-    if state: await state.clear()
     from handlers.discovery import render_discovery_ui
     await render_discovery_ui(bot, message.chat.id, message.from_user.id, db, state)
 
@@ -159,7 +158,6 @@ async def cmd_inbox(message: types.Message, db: DatabaseService, bot: Bot):
 async def cmd_wallet(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
     try: await message.delete()
     except: pass
-    if state: await state.clear()
     from handlers.wallet import render_wallet_hub
     await render_wallet_hub(bot, message.chat.id, message.from_user.id, db, state)
 
@@ -168,7 +166,6 @@ async def cmd_wallet(message: types.Message, db: DatabaseService, bot: Bot, stat
 async def cmd_account(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
     try: await message.delete()
     except: pass
-    if state: await state.clear()
     from handlers.account import render_account_hub
     await render_account_hub(bot, message.chat.id, message.from_user.id, db, state)
 
