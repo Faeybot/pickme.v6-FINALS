@@ -17,7 +17,8 @@ BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 # 1. CORE UI RENDERER (DASHBOARD UTAMA)
 # ==========================================
 async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None, force_new: bool = False):
-    # ⚠️ TIDAK ADA state.clear() - biarkan user melanjutkan aktivitasnya
+    # Bersihkan state apa pun saat kembali ke Dashboard
+    if state: await state.clear()
     
     user = await db.get_user(user_id)
     if not user: return False
@@ -38,7 +39,7 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
     
     inline_kb = UIManager.get_dashboard_inline_kb(total_notif)
     
-    # Coba edit jika ada anchor
+    # Pendekatan render sederhana (Kirim ulang jika force_new, edit jika dari callback)
     if callback_id and not force_new:
         media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=dashboard_text, parse_mode="HTML")
         try:
@@ -46,9 +47,8 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
             await bot.answer_callback_query(callback_id)
             return True
         except Exception:
-            pass
+            pass # Lanjut kirim pesan baru jika edit gagal
 
-    # Fallback: kirim baru
     try:
         sent_message = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=dashboard_text, reply_markup=inline_kb, parse_mode="HTML")
         await db.update_anchor_msg(user_id, sent_message.message_id)
@@ -66,7 +66,7 @@ async def render_dashboard_ui(bot: Bot, chat_id: int, user_id: int, db: Database
 # ==========================================
 async def render_notification_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
     unreads = await db.get_all_unread_counts(user_id)
-    text = "🔔 <b>PUSAT NOTIFIKASI</b>\n\nPantau semua interaksi profilmu di sini."
+    text = "🔔 <b>PUSAT NOTIFIKASI</b>\n\nPantau semua interaksi profilmu di sini. Jangan biarkan pesan atau <i>match</i> barumu menunggu terlalu lama!"
     kb = UIManager.get_notification_center_kb(unreads)
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
@@ -75,10 +75,21 @@ async def render_notification_hub(message_or_callback, db: DatabaseService, bot:
     else:
         await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
 
+async def render_account_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
+    user = await db.get_user(user_id)
+    kasta = "💎 VIP+" if user.is_vip_plus else "🌟 VIP" if user.is_vip else "🎭 PREMIUM" if user.is_premium else "👤 FREE"
+    text = f"⚙️ <b>PUSAT AKUN & STATUS</b>\n\nKelola bagaimana profilmu tampil di <i>Discovery</i> dan pantau sisa kuota harian tier <b>{kasta}</b> kamu hari ini."
+    kb = UIManager.get_account_center_kb()
+    
+    media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
+    if isinstance(message_or_callback, types.CallbackQuery):
+        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
+    else:
+        await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
 
 async def render_finance_hub(message_or_callback, db: DatabaseService, bot: Bot, user_id: int):
     user = await db.get_user(user_id)
-    text = f"💳 <b>DOMPET & REWARD</b>\n\nSaldo Poin: <b>{user.poin_balance:,} Poin</b>"
+    text = f"💳 <b>DOMPET & REWARD</b>\n\nSaldo Poin: <b>{user.poin_balance:,} Poin</b>\n\nBagikan <i>link</i> referralmu untuk mendapatkan koin tambahan, atau cairkan poinmu menjadi uang tunai (Syarat: Status Premium)."
     kb = UIManager.get_finance_center_kb()
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
@@ -100,6 +111,7 @@ async def command_start_handler(message: types.Message, command: CommandObject =
     try: await message.delete()
     except: pass
 
+    # IRON GATE: Wajib Join Grup & Channel
     from handlers.registration import check_membership, CHANNEL_LINK, GROUP_LINK
     is_joined = await check_membership(bot, user_id)
     if not is_joined:
@@ -114,6 +126,7 @@ async def command_start_handler(message: types.Message, command: CommandObject =
         await message.answer(text_new, parse_mode="HTML", reply_markup=types.ReplyKeyboardRemove())
         return await state.set_state(RegState.waiting_nickname)
 
+    # Deep Link Routing (View Profile)
     if args and args.startswith("view_"):
         parts = args.split("_")
         try: 
@@ -126,9 +139,21 @@ async def command_start_handler(message: types.Message, command: CommandObject =
 
     await render_dashboard_ui(bot, chat_id, user_id, db, state, force_new=True)
 
+# Handler Menu Biru Lainya
+@router.message(Command("notifikasi"))
+async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
+    try: await message.delete()
+    except: pass
+    await render_notification_hub(message, db, bot, message.from_user.id)
+
+@router.message(Command("finance"))
+async def cmd_finance(message: types.Message, db: DatabaseService, bot: Bot):
+    try: await message.delete()
+    except: pass
+    await render_finance_hub(message, db, bot, message.from_user.id)
 
 # ==========================================
-# HANDLER UNTUK SEMUA COMMAND MENU BIRU
+# TAMBAHAN: HANDLER UNTUK COMMAND MENU BIRU YANG HILANG
 # ==========================================
 @router.message(Command("feed"))
 async def cmd_feed(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
@@ -137,14 +162,12 @@ async def cmd_feed(message: types.Message, db: DatabaseService, bot: Bot, state:
     from handlers.feed import render_feed_ui
     await render_feed_ui(bot, message.chat.id, message.from_user.id, db, state)
 
-
 @router.message(Command("discovery"))
 async def cmd_discovery(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
     try: await message.delete()
     except: pass
     from handlers.discovery import render_discovery_ui
     await render_discovery_ui(bot, message.chat.id, message.from_user.id, db, state)
-
 
 @router.message(Command("inbox"))
 async def cmd_inbox(message: types.Message, db: DatabaseService, bot: Bot):
@@ -153,14 +176,12 @@ async def cmd_inbox(message: types.Message, db: DatabaseService, bot: Bot):
     from handlers.inbox import render_inbox_list
     await render_inbox_list(bot, message.chat.id, message.from_user.id, db, page=0)
 
-
 @router.message(Command("wallet"))
 async def cmd_wallet(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
     try: await message.delete()
     except: pass
     from handlers.wallet import render_wallet_hub
     await render_wallet_hub(bot, message.chat.id, message.from_user.id, db, state)
-
 
 @router.message(Command("account"))
 async def cmd_account(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
@@ -169,28 +190,12 @@ async def cmd_account(message: types.Message, db: DatabaseService, bot: Bot, sta
     from handlers.account import render_account_hub
     await render_account_hub(bot, message.chat.id, message.from_user.id, db, state)
 
-
-@router.message(Command("notifikasi"))
-async def cmd_notifikasi(message: types.Message, db: DatabaseService, bot: Bot):
-    try: await message.delete()
-    except: pass
-    await render_notification_hub(message, db, bot, message.from_user.id)
-
-
-@router.message(Command("finance"))
-async def cmd_finance(message: types.Message, db: DatabaseService, bot: Bot):
-    try: await message.delete()
-    except: pass
-    await render_finance_hub(message, db, bot, message.from_user.id)
-
-
 @router.message(Command("help"))
 async def cmd_help(message: types.Message):
     try: await message.delete()
     except: pass
     from handlers.help import cmd_help as help_handler
     await help_handler(message)
-
 
 # ==========================================
 # 4. CALLBACK ROUTER (Navigasi Inline)
@@ -209,19 +214,20 @@ async def verify_join_start(callback: types.CallbackQuery, bot: Bot, db: Databas
 async def back_to_dashboard_callback(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
     await render_dashboard_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
+# Tangkap Klik Tombol Hub dari Dashboard
 @router.callback_query(F.data == "menu_notifications")
 async def cb_menu_notifications(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     await render_notification_hub(callback, db, bot, callback.from_user.id)
 
 @router.callback_query(F.data == "menu_account")
-async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
-    from handlers.account import render_account_hub
-    await render_account_hub(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
+async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    await render_account_hub(callback, db, bot, callback.from_user.id)
 
 @router.callback_query(F.data == "menu_finance")
 async def cb_menu_finance(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     await render_finance_hub(callback, db, bot, callback.from_user.id)
 
+# Rute Langsung ke Modul (Feed, Discovery, dll)
 @router.callback_query(F.data == "menu_feed")
 async def cb_menu_feed(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
     from handlers.feed import render_feed_ui
