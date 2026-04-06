@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from aiogram import Router, F, types, Bot
 from aiogram.filters import Command, BaseFilter
 from aiogram.types import (
-    InlineKeyboardButton, InlineKeyboardMarkup, 
+    InlineKeyboardButton, InlineKeyboardMarkup,
     Message, ReplyKeyboardRemove, InputMediaPhoto, BufferedInputFile
 )
 from aiogram.fsm.context import FSMContext
@@ -19,7 +19,6 @@ from services.database import DatabaseService, User, PointLog, ChatSession, Swip
 router = Router()
 
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
-
 
 # ==========================================
 # 0. KONFIGURASI HAK AKSES ADMIN
@@ -36,24 +35,19 @@ def get_int_id(key: str, default=0):
             return val
     return default
 
-
 def get_list_ids(key: str):
     val = os.getenv(key, "")
     return [int(x) for x in val.split(",") if x.strip().lstrip('-').isdigit()]
-
 
 OWNER_ID = get_int_id("OWNER_ID")
 ADMIN_FINANCE_IDS = get_list_ids("ADMIN_FINANCE_IDS")
 ADMIN_MODERATOR_IDS = get_list_ids("ADMIN_MODERATOR_IDS")
 
-# CONTROL PANEL hanya untuk Owner dan Finance Admin
 CONTROL_PANEL_ADMINS = list(set([OWNER_ID] + ADMIN_FINANCE_IDS))
-
 
 class IsControlPanelAdmin(BaseFilter):
     async def __call__(self, message: Message) -> bool:
         return message.from_user.id in CONTROL_PANEL_ADMINS
-
 
 class ControlPanelState(StatesGroup):
     waiting_search_query = State()
@@ -61,13 +55,10 @@ class ControlPanelState(StatesGroup):
     waiting_user_id = State()
     waiting_broadcast = State()
 
-
 # ==========================================
 # 1. FUNGSI SHOW USER DETAIL
 # ==========================================
 async def show_user_detail(chat_id: int, user, bot: Bot, db: DatabaseService):
-    """Menampilkan detail user dengan opsi kelola"""
-    
     if user.is_vip_plus:
         kasta = "💎 VIP+"
     elif user.is_vip:
@@ -76,7 +67,7 @@ async def show_user_detail(chat_id: int, user, bot: Bot, db: DatabaseService):
         kasta = "🎭 PREMIUM"
     else:
         kasta = "👤 FREE"
-    
+
     vip_expiry = ""
     if user.vip_expires_at:
         remaining = user.vip_expires_at - datetime.utcnow()
@@ -88,7 +79,7 @@ async def show_user_detail(chat_id: int, user, bot: Bot, db: DatabaseService):
             vip_expiry = f" (Sisa {hours} jam)"
         else:
             vip_expiry = " (Segera habis)"
-    
+
     text = (
         f"👤 <b>DETAIL USER</b>\n"
         f"<code>{'—' * 30}</code>\n"
@@ -103,7 +94,7 @@ async def show_user_detail(chat_id: int, user, bot: Bot, db: DatabaseService):
         f"📅 Terakhir aktif: {user.last_active_at.strftime('%d/%m %H:%M') if user.last_active_at else '-'}\n"
         f"<code>{'—' * 30}</code>"
     )
-    
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Tambah Poin", callback_data=f"cp_add_points_{user.id}"),
          InlineKeyboardButton(text="💎 Ubah Kasta", callback_data=f"cp_change_tier_{user.id}")],
@@ -112,7 +103,7 @@ async def show_user_detail(chat_id: int, user, bot: Bot, db: DatabaseService):
         [InlineKeyboardButton(text="🔄 Reset SPA", callback_data=f"cp_reset_spa_{user.id}")],
         [InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]
     ])
-    
+
     try:
         await bot.send_photo(
             chat_id=chat_id,
@@ -124,27 +115,23 @@ async def show_user_detail(chat_id: int, user, bot: Bot, db: DatabaseService):
     except:
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, parse_mode="HTML")
 
-
 # ==========================================
 # 2. RENDERER: CONTROL PANEL UTAMA
 # ==========================================
 async def render_control_panel(bot: Bot, chat_id: int, message_id: int = None, callback_id: str = None):
-    """Menampilkan Control Panel utama"""
-    
-    # Cleanup ReplyKeyboard
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id, temp_msg.message_id)
     except:
         pass
-    
+
     text = (
         "🎮 <b>CONTROL PANEL - PICKME BOT</b>\n"
         f"<code>{'—' * 30}</code>\n"
         "Panel khusus untuk Owner & Admin Finance.\n\n"
         "👇 <i>Pilih perintah eksekusi:</i>"
     )
-    
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 STATISTIK", callback_data="cp_stats")],
         [InlineKeyboardButton(text="🔍 CARI & KELOLA USER", callback_data="cp_search_user")],
@@ -155,89 +142,60 @@ async def render_control_panel(bot: Bot, chat_id: int, message_id: int = None, c
         [InlineKeyboardButton(text="📤 EXPORT DATA USER", callback_data="cp_export_users")],
         [InlineKeyboardButton(text="❌ TUTUP PANEL", callback_data="cp_close")]
     ])
-    
+
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
-    
+
     if message_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=media, reply_markup=kb)
         except:
-            pass
+            sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
     else:
         sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-    
+
     if callback_id:
         try:
             await bot.answer_callback_query(callback_id)
         except:
             pass
 
-
-@router.message(Command("control_panel"), IsControlPanelAdmin())
-async def open_control_panel(message: types.Message, bot: Bot):
-    try:
-        await message.delete()
-    except:
-        pass
-    await render_control_panel(bot, message.chat.id)
-
-
-@router.message(Command("control_panel"))
-async def ignore_non_admin(message: types.Message):
-    pass
-
-
-@router.callback_query(F.data == "cp_menu", IsControlPanelAdmin())
-async def back_to_cp_menu(callback: types.CallbackQuery, bot: Bot):
-    await render_control_panel(bot, callback.message.chat.id, callback.message.message_id, callback.id)
-
-
-@router.callback_query(F.data == "cp_close", IsControlPanelAdmin())
-async def close_control_panel(callback: types.CallbackQuery):
-    try:
-        await callback.message.delete()
-    except:
-        pass
-    await callback.answer("Control Panel Ditutup.")
-
-
 # ==========================================
-# 3. STATISTIK
+# 3. STATISTIK (Kirim pesan baru)
 # ==========================================
 @router.callback_query(F.data == "cp_stats", IsControlPanelAdmin())
 async def show_statistics(callback: types.CallbackQuery, db: DatabaseService):
     await callback.answer("⏳ Mengambil data statistik...")
-    
+
     async with db.session_factory() as session:
         total_users = await session.execute(select(func.count(User.id)))
         t_usr = total_users.scalar() or 0
-        
+
         total_premium = await session.execute(select(func.count(User.id)).where(User.is_premium == True))
         total_vip = await session.execute(select(func.count(User.id)).where(User.is_vip == True))
         total_vipplus = await session.execute(select(func.count(User.id)).where(User.is_vip_plus == True))
         total_free = t_usr - (total_premium.scalar() or 0) - (total_vip.scalar() or 0) - (total_vipplus.scalar() or 0)
-        
+
         total_points = await session.execute(select(func.sum(User.poin_balance)))
         t_pts = total_points.scalar() or 0
-        
+
         day_ago = datetime.utcnow() - timedelta(hours=24)
         active_users = await session.execute(select(func.count(User.id)).where(User.last_active_at >= day_ago))
         active_24h = active_users.scalar() or 0
-        
+
         now_ts = int(datetime.now().timestamp())
         active_chats = await session.execute(select(func.count(ChatSession.id)).where(ChatSession.expires_at > now_ts))
         active_chats_count = active_chats.scalar() or 0
-        
+
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0)
         new_today = await session.execute(select(func.count(User.id)).where(User.last_active_at >= today_start))
         new_today_count = new_today.scalar() or 0
-        
+
         swipes_today = await session.execute(select(func.count(SwipeHistory.id)).where(SwipeHistory.created_at >= today_start))
         swipes_count = swipes_today.scalar() or 0
-        
+
         pending_wd = await session.execute(select(func.count(WithdrawRequest.id)).where(WithdrawRequest.status == "PENDING"))
         pending_wd_count = pending_wd.scalar() or 0
-    
+
     text = (
         "📊 <b>STATISTIK PICKME BOT</b>\n"
         f"<code>{'—' * 30}</code>\n"
@@ -246,34 +204,20 @@ async def show_statistics(callback: types.CallbackQuery, db: DatabaseService):
         f"├─ 🌟 VIP: {total_vip.scalar() or 0:,}\n"
         f"├─ 🎭 Premium: {total_premium.scalar() or 0:,}\n"
         f"└─ 👤 Free: {total_free:,}\n\n"
-        
         f"📈 <b>Aktivitas 24 Jam:</b>\n"
         f"├─ Aktif: {active_24h:,} User\n"
         f"├─ User Baru: {new_today_count:,}\n"
         f"├─ Swipe: {swipes_count:,}\n"
         f"└─ Chat Aktif: {active_chats_count:,} Sesi\n\n"
-        
         f"💰 <b>Keuangan:</b>\n"
         f"├─ Poin Beredar: {t_pts:,} Poin\n"
         f"├─ Estimasi Rupiah: Rp {(t_pts // 10):,}\n"
         f"└─ WD Pending: {pending_wd_count} Request\n"
-        f"<code>{'—' * 30}</code>"
+        f"<code>{'—' * 30}</code>\n\n"
+        f"<i>Ketik /control_panel untuk kembali ke menu utama.</i>"
     )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Refresh", callback_data="cp_stats")],
-        [InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]
-    ])
-    
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except:
-        try:
-            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-        except:
-            await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
-    await callback.answer()
 
+    await callback.message.answer(text, parse_mode="HTML")
 
 # ==========================================
 # 4. CARI USER
@@ -287,40 +231,31 @@ async def ask_search_user(callback: types.CallbackQuery, state: FSMContext):
         "Ketik /cancel untuk membatalkan."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]])
-    
     try:
         await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
     except:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    
     await state.set_state(ControlPanelState.waiting_search_query)
     await callback.answer()
-
 
 @router.message(ControlPanelState.waiting_search_query, IsControlPanelAdmin())
 async def process_search_user(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     if message.text == "/cancel":
         await state.clear()
         return await render_control_panel(bot, message.chat.id)
-    
     query = message.text.strip()
     user = None
-    
     if query.lstrip('-').isdigit():
         user = await db.get_user(int(query))
-    
     try:
         await message.delete()
     except:
         pass
-    
     if not user:
         await message.answer(f"❌ User dengan ID <code>{query}</code> tidak ditemukan.", parse_mode="HTML")
         return
-    
     await show_user_detail(message.chat.id, user, bot, db)
     await state.clear()
-
 
 # ==========================================
 # 5. TAMBAH/KURANGI POIN
@@ -334,42 +269,33 @@ async def ask_points_user_id(callback: types.CallbackQuery, state: FSMContext):
         "Ketik /cancel untuk membatalkan."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]])
-    
     try:
         await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
     except:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    
     await state.set_state(ControlPanelState.waiting_user_id)
     await callback.answer()
-
 
 @router.message(ControlPanelState.waiting_user_id, IsControlPanelAdmin())
 async def process_points_user_id(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     if message.text == "/cancel":
         await state.clear()
         return await render_control_panel(bot, message.chat.id)
-    
     query = message.text.strip()
     if not query.lstrip('-').isdigit():
         await message.answer("⚠️ Masukkan ID Telegram yang valid (angka)!")
         return
-    
     user_id = int(query)
     user = await db.get_user(user_id)
-    
     try:
         await message.delete()
     except:
         pass
-    
     if not user:
         await message.answer(f"❌ User dengan ID <code>{user_id}</code> tidak ditemukan.", parse_mode="HTML")
         await state.clear()
         return
-    
     await state.update_data(target_user_id=user_id)
-    
     text = (
         "💰 <b>MASUKKAN NOMINAL POIN</b>\n\n"
         f"User: <b>{user.full_name}</b>\n"
@@ -379,57 +305,46 @@ async def process_points_user_id(message: types.Message, state: FSMContext, db: 
         "<i>Contoh: 5000 atau -1000</i>\n\n"
         "Ketik /cancel untuk membatalkan."
     )
-    
     await message.answer(text, parse_mode="HTML")
     await state.set_state(ControlPanelState.waiting_points_amount)
-
 
 @router.message(ControlPanelState.waiting_points_amount, IsControlPanelAdmin())
 async def process_points_change(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     if message.text == "/cancel":
         await state.clear()
         return await render_control_panel(bot, message.chat.id)
-    
     data = await state.get_data()
     target_id = data.get("target_user_id")
-    
     try:
         amount = int(message.text.strip())
     except ValueError:
         await message.answer("⚠️ Masukkan angka yang valid!")
         return
-    
     try:
         await message.delete()
     except:
         pass
-    
     user = await db.get_user(target_id)
     if not user:
         await message.answer("❌ User tidak ditemukan.")
         await state.clear()
         return
-    
     async with db.session_factory() as session:
         u = await session.get(User, target_id)
         u.poin_balance += amount
         session.add(PointLog(user_id=target_id, amount=amount, source=f"Admin Adjustment by {message.from_user.id}"))
         await session.commit()
-    
     if amount > 0:
         notif_text = f"🎉 <b>BONUS DARI ADMIN!</b>\nSaldo poin Anda bertambah <b>+{amount:,} Poin</b>."
     else:
         notif_text = f"⚠️ <b>PENYESUAIAN ADMIN</b>\nSaldo poin Anda berkurang <b>{abs(amount):,} Poin</b>."
-    
     try:
         await bot.send_message(target_id, notif_text, parse_mode="HTML")
     except:
         pass
-    
     await message.answer(f"✅ Poin user <code>{target_id}</code> telah diubah: {'+' if amount > 0 else ''}{amount:,} poin. Saldo sekarang: {user.poin_balance + amount:,}")
     await state.clear()
     await show_user_detail(message.chat.id, user, bot, db)
-
 
 # ==========================================
 # 6. KELOLA KASTA USER
@@ -443,19 +358,14 @@ async def ask_tier_user_id(callback: types.CallbackQuery, state: FSMContext):
         "Ketik /cancel untuk membatalkan."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]])
-    
     try:
         await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
     except:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    
     await state.set_state(ControlPanelState.waiting_user_id)
     await callback.answer()
 
-
 async def show_tier_options(chat_id: int, user, bot: Bot, db: DatabaseService, state: FSMContext):
-    """Menampilkan opsi pemilihan kasta"""
-    
     if user.is_vip_plus:
         current_tier = "💎 VIP+"
     elif user.is_vip:
@@ -464,7 +374,6 @@ async def show_tier_options(chat_id: int, user, bot: Bot, db: DatabaseService, s
         current_tier = "🎭 PREMIUM"
     else:
         current_tier = "👤 FREE"
-    
     text = (
         f"💎 <b>UBAH KASTA USER</b>\n"
         f"<code>{'—' * 30}</code>\n"
@@ -472,7 +381,6 @@ async def show_tier_options(chat_id: int, user, bot: Bot, db: DatabaseService, s
         f"Kasta Saat Ini: {current_tier}\n\n"
         f"Pilih kasta baru untuk user ini:"
     )
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👤 FREE", callback_data=f"cp_set_tier_{user.id}_free")],
         [InlineKeyboardButton(text="🎭 PREMIUM (Seumur Hidup)", callback_data=f"cp_set_tier_{user.id}_premium")],
@@ -480,24 +388,19 @@ async def show_tier_options(chat_id: int, user, bot: Bot, db: DatabaseService, s
         [InlineKeyboardButton(text="💎 VIP+ (30 Hari)", callback_data=f"cp_set_tier_{user.id}_vipplus")],
         [InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]
     ])
-    
     await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, parse_mode="HTML")
     await state.clear()
-
 
 @router.callback_query(F.data.startswith("cp_set_tier_"), IsControlPanelAdmin())
 async def execute_tier_change(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     parts = callback.data.split("_")
     user_id = int(parts[3])
     tier = parts[4]
-    
     expiry_date = datetime.utcnow() + timedelta(days=30) if tier in ["vip", "vipplus"] else None
-    
     async with db.session_factory() as session:
         user = await session.get(User, user_id)
         if not user:
             return await callback.answer("User tidak ditemukan.", show_alert=True)
-        
         if tier == "free":
             user.is_premium = False
             user.is_vip = False
@@ -534,7 +437,7 @@ async def execute_tier_change(callback: types.CallbackQuery, db: DatabaseService
             user.daily_unmask_quota = 0
             user.daily_swipe_quota = 30
             tier_name = "VIP"
-        else:  # vipplus
+        else:
             user.is_premium = False
             user.is_vip = False
             user.is_vip_plus = True
@@ -546,9 +449,7 @@ async def execute_tier_change(callback: types.CallbackQuery, db: DatabaseService
             user.daily_unmask_quota = 10
             user.daily_swipe_quota = 50
             tier_name = "VIP+"
-        
         await session.commit()
-    
     notif_text = (
         f"👑 <b>UPDATE KASTA AKUN</b>\n\n"
         f"Selamat! Kasta akun Anda telah diubah menjadi <b>{tier_name}</b> oleh Admin.\n"
@@ -559,37 +460,30 @@ async def execute_tier_change(callback: types.CallbackQuery, db: DatabaseService
         await bot.send_message(user_id, notif_text, parse_mode="HTML")
     except:
         pass
-    
     await callback.answer(f"✅ Kasta user diubah menjadi {tier_name}!")
     user = await db.get_user(user_id)
     await show_user_detail(callback.message.chat.id, user, bot, db)
 
-
 # ==========================================
-# 7. RESET SPA (INDIVIDUAL)
+# 7. RESET SPA INDIVIDUAL
 # ==========================================
 @router.callback_query(F.data.startswith("cp_reset_spa_"), IsControlPanelAdmin())
 async def reset_individual_spa(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     user_id = int(callback.data.split("_")[3])
-    
     async with db.session_factory() as session:
         await session.execute(update(User).where(User.id == user_id).values(nav_stack=["dashboard"]))
         await session.commit()
-    
     await callback.answer("✅ SPA user telah direset ke Dashboard!")
-    
     from handlers.start import render_dashboard_ui
     try:
         await render_dashboard_ui(bot, user_id, user_id, db, None, force_new=True)
     except:
         pass
-    
     user = await db.get_user(user_id)
     await show_user_detail(callback.message.chat.id, user, bot, db)
 
-
 # ==========================================
-# 8. RESET SPA (MASSAL)
+# 8. RESET SPA MASSAL
 # ==========================================
 @router.callback_query(F.data == "cp_reset_all", IsControlPanelAdmin())
 async def confirm_reset_all(callback: types.CallbackQuery):
@@ -612,38 +506,30 @@ async def confirm_reset_all(callback: types.CallbackQuery):
         await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
-
 @router.callback_query(F.data == "cp_execute_reset", IsControlPanelAdmin())
 async def execute_reset_all(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     msg_status = await callback.message.edit_text("⏳ <b>Menjalankan Reset Massal...</b>\n<i>Harap tunggu.</i>")
-    
     async with db.session_factory() as session:
         result = await session.execute(select(User.id))
         all_users = result.scalars().all()
-    
     from handlers.start import render_dashboard_ui
     success_count = 0
-    
     for user_id in all_users:
         try:
             async with db.session_factory() as session:
                 await session.execute(update(User).where(User.id == user_id).values(nav_stack=["dashboard"]))
                 await session.commit()
-            
             try:
                 await render_dashboard_ui(bot, user_id, user_id, db, None, force_new=True)
             except:
                 pass
-            
             success_count += 1
         except Exception:
             pass
         await asyncio.sleep(0.05)
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]])
     await msg_status.edit_text(f"✅ <b>RESET SELESAI!</b>\n{success_count} User berhasil dipulihkan.", reply_markup=kb)
     await callback.answer()
-
 
 # ==========================================
 # 9. BROADCAST
@@ -660,32 +546,25 @@ async def ask_broadcast(callback: types.CallbackQuery, state: FSMContext):
         "<i>Ketik /cancel untuk membatalkan</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]])
-    
     try:
         await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
     except:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    
     await state.set_state(ControlPanelState.waiting_broadcast)
     await callback.answer()
-
 
 @router.message(ControlPanelState.waiting_broadcast, IsControlPanelAdmin())
 async def process_broadcast(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     if message.text == "/cancel":
         await state.clear()
         return await render_control_panel(bot, message.chat.id)
-    
     async with db.session_factory() as session:
         result = await session.execute(select(User.id))
         all_users = result.scalars().all()
-    
     await state.clear()
     msg_status = await message.answer(f"⏳ <b>Memulai Broadcast ke {len(all_users)} user...</b>\n<i>Mohon tunggu.</i>")
-    
     success_count = 0
     fail_count = 0
-    
     for user_id in all_users:
         try:
             if message.photo:
@@ -712,7 +591,6 @@ async def process_broadcast(message: types.Message, state: FSMContext, db: Datab
         except Exception:
             fail_count += 1
         await asyncio.sleep(0.05)
-    
     text_report = (
         "✅ <b>BROADCAST SELESAI!</b>\n"
         f"<code>{'—' * 30}</code>\n"
@@ -722,22 +600,18 @@ async def process_broadcast(message: types.Message, state: FSMContext, db: Datab
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Kembali", callback_data="cp_menu")]])
     await msg_status.edit_text(text_report, reply_markup=kb)
 
-
 # ==========================================
 # 10. EXPORT DATA USER
 # ==========================================
 @router.callback_query(F.data == "cp_export_users", IsControlPanelAdmin())
 async def export_users_data(callback: types.CallbackQuery, db: DatabaseService):
     msg_status = await callback.message.edit_text("⏳ <b>Mengambil data user...</b>\n<i>Harap tunggu.</i>")
-    
     async with db.session_factory() as session:
         result = await session.execute(select(User))
         users = result.scalars().all()
-    
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["ID", "Nama", "Usia", "Gender", "Kota", "Kasta", "Poin", "Terakhir Aktif"])
-    
     for user in users:
         if user.is_vip_plus:
             kasta = "VIP+"
@@ -747,7 +621,6 @@ async def export_users_data(callback: types.CallbackQuery, db: DatabaseService):
             kasta = "Premium"
         else:
             kasta = "Free"
-        
         writer.writerow([
             user.id,
             user.full_name,
@@ -758,11 +631,8 @@ async def export_users_data(callback: types.CallbackQuery, db: DatabaseService):
             user.poin_balance,
             user.last_active_at.strftime("%Y-%m-%d %H:%M") if user.last_active_at else "-"
         ])
-    
     output.seek(0)
-    
     file = BufferedInputFile(output.getvalue().encode('utf-8'), filename="pickme_users_export.csv")
-    
     await msg_status.delete()
     await callback.message.answer_document(
         document=file,
@@ -771,13 +641,11 @@ async def export_users_data(callback: types.CallbackQuery, db: DatabaseService):
     )
     await callback.answer()
 
-
 # ==========================================
 # 11. KIRIM PESAN KE USER
 # ==========================================
 class ChatAdminState(StatesGroup):
     waiting_admin_msg = State()
-
 
 @router.callback_query(F.data.startswith("cp_msg_"), IsControlPanelAdmin())
 async def admin_chat_start(callback: types.CallbackQuery, state: FSMContext):
@@ -787,12 +655,10 @@ async def admin_chat_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(f"💬 Ketik pesan untuk User <code>{target_id}</code>:", parse_mode="HTML")
     await callback.answer()
 
-
 @router.message(ChatAdminState.waiting_admin_msg)
 async def admin_chat_send(message: types.Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     target_id = data.get("chat_target_id")
-    
     text = f"📩 <b>PESAN ADMIN PICKME</b>\n<code>{'—' * 20}</code>\n{html.escape(message.text)}"
     try:
         await bot.send_message(target_id, text, parse_mode="HTML")
@@ -800,7 +666,6 @@ async def admin_chat_send(message: types.Message, state: FSMContext, bot: Bot):
     except:
         await message.answer("❌ Gagal kirim.")
     await state.clear()
-
 
 @router.callback_query(F.data.startswith("cp_view_"), IsControlPanelAdmin())
 async def admin_view_profile(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
@@ -810,8 +675,16 @@ async def admin_view_profile(callback: types.CallbackQuery, db: DatabaseService,
     await callback.answer()
 
 # ==========================================
-# 12. FORCE RESET ALL USERS (OWNER ONLY)
+# 12. MENU UTAMA DAN NAVIGASI
 # ==========================================
-@router.message(Command("restart_dashboard_history_all_user"))
-async def force_reset_all_users(message: types.Message, db: DatabaseService, bot: Bot):
-    await message.answer("Test: Command sukses")
+@router.callback_query(F.data == "cp_menu", IsControlPanelAdmin())
+async def back_to_cp_menu(callback: types.CallbackQuery, bot: Bot):
+    await render_control_panel(bot, callback.message.chat.id, callback.message.message_id, callback.id)
+
+@router.callback_query(F.data == "cp_close", IsControlPanelAdmin())
+async def close_control_panel(callback: types.CallbackQuery):
+    try:
+        await callback.message.delete()
+    except:
+        pass
+    await callback.answer("Control Panel Ditutup.")
