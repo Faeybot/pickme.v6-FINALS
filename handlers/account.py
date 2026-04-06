@@ -56,7 +56,7 @@ class EditProfile(StatesGroup):
 
 
 # ==========================================
-# 2. RENDERER UTAMA: AKUN HUB (GERBANG)
+# 2. RENDERER UTAMA: AKUN HUB (GERBANG) - DIPERBAIKI FALLBACK
 # ==========================================
 async def render_account_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None):
     """Menu utama Akun - Hanya gerbang ke sub-menu"""
@@ -104,24 +104,42 @@ async def render_account_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseS
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
+    # Fallback edit
+    success = False
     if callback_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
             await bot.answer_callback_query(callback_id)
+            success = True
+            return True
         except Exception as e:
-            logging.error(f"Edit media gagal: {e}")
-    else:
+            logging.error(f"Edit media account hub gagal: {e}")
+            # Hapus anchor yang rusak
+            if user.anchor_msg_id:
+                try:
+                    await bot.delete_message(chat_id, user.anchor_msg_id)
+                except:
+                    pass
+                await db.update_anchor_msg(user_id, None)
+    
+    # Kirim pesan baru
+    try:
+        sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+        await db.update_anchor_msg(user_id, sent.message_id)
+    except Exception as e:
+        logging.error(f"Kirim ulang account hub gagal: {e}")
+    
+    if callback_id and not success:
         try:
-            sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-            await db.update_anchor_msg(user_id, sent.message_id)
-        except Exception as e:
-            logging.error(f"Kirim ulang gagal: {e}")
+            await bot.answer_callback_query(callback_id)
+        except:
+            pass
     
     return True
 
 
 # ==========================================
-# 3. HANDLER: LIHAT & EDIT PROFIL (PROFIL LENGKAP)
+# 3. HANDLER: LIHAT & EDIT PROFIL (PROFIL LENGKAP) - DIPERBAIKI FALLBACK
 # ==========================================
 @router.callback_query(F.data == "acc_view_profile")
 async def handle_view_profile(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
@@ -183,18 +201,35 @@ async def render_full_profile_ui(bot: Bot, chat_id: int, user_id: int, db: Datab
     
     media = InputMediaPhoto(media=user.photo_id, caption=text, parse_mode="HTML")
     
+    # Fallback edit
+    success = False
     if callback_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
             await bot.answer_callback_query(callback_id)
+            success = True
+            return True
+        except Exception as e:
+            logging.error(f"Edit full profile gagal: {e}")
+            if user.anchor_msg_id:
+                try:
+                    await bot.delete_message(chat_id, user.anchor_msg_id)
+                except:
+                    pass
+                await db.update_anchor_msg(user_id, None)
+    
+    # Kirim pesan baru
+    try:
+        sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id, caption=text, reply_markup=kb, parse_mode="HTML")
+        await db.update_anchor_msg(user_id, sent.message_id)
+    except Exception as e:
+        logging.error(f"Kirim ulang full profile gagal: {e}")
+    
+    if callback_id and not success:
+        try:
+            await bot.answer_callback_query(callback_id)
         except:
             pass
-    else:
-        try:
-            sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id, caption=text, reply_markup=kb, parse_mode="HTML")
-            await db.update_anchor_msg(user_id, sent.message_id)
-        except Exception as e:
-            logging.error(f"Gagal render profile UI: {e}")
     
     return True
 
@@ -210,7 +245,7 @@ async def handle_view_status(callback: types.CallbackQuery, db: DatabaseService,
 
 
 # ==========================================
-# 5. HANDLER: EDIT PROFIL (MENU)
+# 5. HANDLER: EDIT PROFIL (MENU) - DIPERBAIKI FALLBACK
 # ==========================================
 @router.callback_query(F.data == "acc_edit_menu")
 async def handle_edit_menu(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
@@ -237,16 +272,33 @@ async def render_edit_hub(bot: Bot, chat_id: int, user_id: int, db: DatabaseServ
     
     media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
+    # Fallback edit
+    success = False
     if callback_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
             await bot.answer_callback_query(callback_id)
-        except:
-            pass
-    else:
+            success = True
+            return True
+        except Exception as e:
+            logging.error(f"Edit edit hub gagal: {e}")
+            if user.anchor_msg_id:
+                try:
+                    await bot.delete_message(chat_id, user.anchor_msg_id)
+                except:
+                    pass
+                await db.update_anchor_msg(user_id, None)
+    
+    # Kirim pesan baru
+    try:
+        sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+        await db.update_anchor_msg(user_id, sent.message_id)
+    except Exception as e:
+        logging.error(f"Kirim ulang edit hub gagal: {e}")
+    
+    if callback_id and not success:
         try:
-            sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-            await db.update_anchor_msg(user_id, sent.message_id)
+            await bot.answer_callback_query(callback_id)
         except:
             pass
     
@@ -471,8 +523,9 @@ async def save_interests(callback: types.CallbackQuery, state: FSMContext, db: D
     await callback.answer("✅ Minat disimpan!", show_alert=True)
     await render_full_profile_ui(bot, callback.message.chat.id, callback.from_user.id, db, None)
 
+
 # ==========================================
-# 10. GALERI FOTO & MANAJEMEN (VERSI FINAL)
+# 10. GALERI FOTO & MANAJEMEN (VERSI FINAL) - DIPERBAIKI FALLBACK
 # ==========================================
 
 # Dictionary untuk menyimpan user yang sedang upload
@@ -528,16 +581,29 @@ async def render_gallery_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseSe
     
     media = InputMediaPhoto(media=user.photo_id or BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
+    # Jika ada message_id, coba edit pesan tersebut
     if message_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=media, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
-        except:
-            # Jika edit gagal, kirim pesan baru
+            return
+        except Exception as e:
+            logging.warning(f"Edit gallery gagal: {e}")
+            # fallback: kirim baru
+            if user.anchor_msg_id:
+                try:
+                    await bot.delete_message(chat_id, user.anchor_msg_id)
+                except:
+                    pass
+                await db.update_anchor_msg(user_id, None)
             sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
             await db.update_anchor_msg(user_id, sent.message_id)
     else:
-        sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
-        await db.update_anchor_msg(user_id, sent.message_id)
+        # Kirim pesan baru
+        try:
+            sent = await bot.send_photo(chat_id=chat_id, photo=user.photo_id or BANNER_PHOTO_ID, caption=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
+        except Exception as e:
+            logging.error(f"Kirim gallery gagal: {e}")
 
 
 @router.callback_query(F.data == "manage_photos")
@@ -596,7 +662,7 @@ async def handle_extra_2(callback: types.CallbackQuery):
     await callback.message.answer(
         "📸 <b>FOTO ALBUM 2</b>\n\n"
         "Silakan kirim foto untuk album 2.\n\n"
-        "⚠️ <b>PENTING:</b> Pilih foto dari <b>GALERI HP</b> (bukan dari FILE) untuk hasil terbaik.\n\n"
+        "⚠️ <b>PENTING:</b> Pilih foto dari <b>GALERI HP</b> (bukan dari FILE) para hasil terbaik.\n\n"
         "<i>Kirim foto sekarang...</i>",
         parse_mode="HTML"
     )
