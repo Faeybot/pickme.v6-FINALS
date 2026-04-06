@@ -304,3 +304,26 @@ async def cb_menu_discovery(callback: types.CallbackQuery, db: DatabaseService, 
 async def cb_menu_pricing(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     from handlers.pricing import render_pricing_main_ui
     await render_pricing_main_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
+
+# ==========================================
+# TEMPORARY: RESET ALL USERS (TEST)
+# ==========================================
+@router.message(Command("restart_dashboard_history_all_user"))
+async def temp_reset_all(message: types.Message, db: DatabaseService):
+    await message.answer("🔧 Command diterima. Memproses...")
+    
+    # Hanya owner yang bisa
+    OWNER_ID = int(os.getenv("OWNER_ID", 0))
+    if message.from_user.id != OWNER_ID:
+        await message.answer("❌ Anda bukan owner.")
+        return
+    
+    try:
+        async with db.session_factory() as session:
+            from sqlalchemy import update
+            from services.database import User
+            await session.execute(update(User).values(anchor_msg_id=None, nav_stack=["dashboard"]))
+            await session.commit()
+        await message.answer("✅ Berhasil reset semua user.")
+    except Exception as e:
+        await message.answer(f"❌ Error: {e}")
