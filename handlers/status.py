@@ -1,8 +1,3 @@
-"""
-STATUS & KUOTA - Menampilkan sisa kuota harian user
-File ini berdiri sendiri, dipanggil dari account.py
-"""
-
 import os
 import logging
 from aiogram import Router, F, types, Bot
@@ -74,17 +69,30 @@ async def render_status_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseSer
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
-    if callback_id:
+    # Coba edit pesan jika ada anchor
+    success = False
+    if user.anchor_msg_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
-            await bot.answer_callback_query(callback_id)
-        except:
-            pass
-    else:
+            success = True
+        except Exception as e:
+            logging.warning(f"Edit status gagal: {e}")
+            # Anchor rusak, hapus dari DB
+            await db.update_anchor_msg(user_id, None)
+    
+    if not success:
+        # Kirim pesan baru
         try:
             sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
             await db.update_anchor_msg(user_id, sent.message_id)
         except Exception as e:
-            logging.error(f"Gagal render status UI: {e}")
+            logging.error(f"Gagal kirim status UI: {e}")
+    
+    # Answer callback jika ada
+    if callback_id:
+        try:
+            await bot.answer_callback_query(callback_id)
+        except:
+            pass
     
     return True
