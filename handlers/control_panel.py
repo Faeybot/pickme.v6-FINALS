@@ -813,3 +813,25 @@ async def admin_view_profile(callback: types.CallbackQuery, db: DatabaseService,
     user = await db.get_user(target_id)
     await show_user_detail(callback.message.chat.id, user, bot, db)
     await callback.answer()
+
+# ==========================================
+# 12. FORCE RESET ALL USERS (OWNER ONLY)
+# ==========================================
+@router.message(Command("restart_dashboard_history_all_user"))
+async def force_reset_all_users(message: types.Message, db: DatabaseService, bot: Bot):
+    # Hanya owner yang bisa
+    if message.from_user.id != OWNER_ID:
+        await message.answer("❌ Anda tidak memiliki akses ke perintah ini.")
+        return
+    
+    status_msg = await message.answer("⏳ Memulai reset semua user... Mohon tunggu.")
+    
+    try:
+        async with db.session_factory() as session:
+            # Reset anchor_msg_id dan nav_stack semua user
+            await session.execute(update(User).values(anchor_msg_id=None, nav_stack=["dashboard"]))
+            await session.commit()
+        
+        await status_msg.edit_text("✅ Berhasil! Semua user telah direset. Mereka akan mendapatkan dashboard baru saat kembali berinteraksi.")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Gagal reset: {e}")
