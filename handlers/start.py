@@ -70,8 +70,26 @@ async def render_notification_hub(message_or_callback, db: DatabaseService, bot:
     kb = UIManager.get_notification_center_kb(unreads)
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
+    
+    # Ambil user untuk anchor
+    user = await db.get_user(user_id)
     if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
+        try:
+            await message_or_callback.message.edit_media(media=media, reply_markup=kb)
+            await message_or_callback.answer()
+            return
+        except Exception as e:
+            logging.warning(f"Edit notif hub gagal: {e}")
+            # fallback: kirim baru
+            if user and user.anchor_msg_id:
+                try:
+                    await bot.delete_message(message_or_callback.message.chat.id, user.anchor_msg_id)
+                except:
+                    pass
+                await db.update_anchor_msg(user_id, None)
+            sent = await bot.send_photo(message_or_callback.message.chat.id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
+            await message_or_callback.answer()
     else:
         await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
 
@@ -82,8 +100,24 @@ async def render_account_hub(message_or_callback, db: DatabaseService, bot: Bot,
     kb = UIManager.get_account_center_kb()
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
+    
     if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
+        try:
+            await message_or_callback.message.edit_media(media=media, reply_markup=kb)
+            await message_or_callback.answer()
+            return
+        except Exception as e:
+            logging.warning(f"Edit account hub gagal: {e}")
+            # fallback: kirim baru
+            if user and user.anchor_msg_id:
+                try:
+                    await bot.delete_message(message_or_callback.message.chat.id, user.anchor_msg_id)
+                except:
+                    pass
+                await db.update_anchor_msg(user_id, None)
+            sent = await bot.send_photo(message_or_callback.message.chat.id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
+            await message_or_callback.answer()
     else:
         await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
 
@@ -93,8 +127,23 @@ async def render_finance_hub(message_or_callback, db: DatabaseService, bot: Bot,
     kb = UIManager.get_finance_center_kb()
     
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
+    
     if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_media(media=media, reply_markup=kb)
+        try:
+            await message_or_callback.message.edit_media(media=media, reply_markup=kb)
+            await message_or_callback.answer()
+            return
+        except Exception as e:
+            logging.warning(f"Edit finance hub gagal: {e}")
+            if user and user.anchor_msg_id:
+                try:
+                    await bot.delete_message(message_or_callback.message.chat.id, user.anchor_msg_id)
+                except:
+                    pass
+                await db.update_anchor_msg(user_id, None)
+            sent = await bot.send_photo(message_or_callback.message.chat.id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+            await db.update_anchor_msg(user_id, sent.message_id)
+            await message_or_callback.answer()
     else:
         await message_or_callback.answer_photo(photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
 
@@ -235,7 +284,7 @@ async def cb_menu_profile(callback: types.CallbackQuery, db: DatabaseService, bo
 
 @router.callback_query(F.data == "menu_status")
 async def cb_menu_status(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
-    from handlers.account import render_status_ui
+    from handlers.status import render_status_ui   # Perbaikan: import dari status.py
     await render_status_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
 
 # Rute Langsung ke Modul (Feed, Discovery, dll)
