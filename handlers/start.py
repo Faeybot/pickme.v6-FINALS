@@ -202,6 +202,25 @@ async def cmd_finance(message: types.Message, db: DatabaseService, bot: Bot):
     await render_finance_hub(message, db, bot, message.from_user.id)
 
 # ==========================================
+# CONTROL PANEL ACCESS (OWNER ONLY)
+# ==========================================
+@router.message(Command("control_panel"))
+@router.message(Command("open_control_panel"))
+async def open_control_panel(message: types.Message, bot: Bot, db: DatabaseService):
+    OWNER_ID = int(os.getenv("OWNER_ID", 0))
+    if message.from_user.id != OWNER_ID:
+        await message.answer("❌ Akses ditolak. Anda bukan owner.")
+        return
+    
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    from handlers.control_panel import render_control_panel
+    await render_control_panel(bot, message.chat.id)
+
+# ==========================================
 # TAMBAHAN: HANDLER UNTUK COMMAND MENU BIRU YANG HILANG
 # ==========================================
 @router.message(Command("feed"))
