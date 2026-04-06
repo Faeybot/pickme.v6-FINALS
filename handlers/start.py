@@ -227,6 +227,17 @@ async def cb_menu_account(callback: types.CallbackQuery, db: DatabaseService, bo
 async def cb_menu_finance(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     await render_finance_hub(callback, db, bot, callback.from_user.id)
 
+# Tambahkan di bagian CALLBACK ROUTER (setelah cb_menu_finance atau di akhir)
+@router.callback_query(F.data == "menu_profile")
+async def cb_menu_profile(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
+    from handlers.account import render_full_profile_ui
+    await render_full_profile_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
+
+@router.callback_query(F.data == "menu_status")
+async def cb_menu_status(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
+    from handlers.account import render_status_ui
+    await render_status_ui(bot, callback.message.chat.id, callback.from_user.id, db, callback.id)
+
 # Rute Langsung ke Modul (Feed, Discovery, dll)
 @router.callback_query(F.data == "menu_feed")
 async def cb_menu_feed(callback: types.CallbackQuery, db: DatabaseService, bot: Bot, state: FSMContext):
