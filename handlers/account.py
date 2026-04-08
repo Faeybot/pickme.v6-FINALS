@@ -676,15 +676,16 @@ async def handle_extra_2(callback: types.CallbackQuery):
 
 @router.message(F.photo)
 async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bot):
-    """Menangani upload foto dari menu galeri (Akun Saya) saja. 
-       Tidak mengganggu upload foto untuk feed."""
+    print("⚠️⚠️⚠️ ACCOUNT HANDLER: handle_all_photos TERPANGGIL ⚠️⚠️⚠️")
+    logging.info("ACCOUNT HANDLER: handle_all_photos called")
     
     user_id = message.from_user.id
     action = waiting_for_upload.get(user_id)
+    print(f"DEBUG: action = {action}")
     
-    # Jika tidak ada session upload aktif, abaikan (biar handler feed yang proses)
     if not action:
-        return
+        print("DEBUG: Tidak ada session upload, return (diam)")
+        return  # <-- ini penting: tidak kirim pesan error
     
     # Hapus session upload agar tidak dipakai ulang
     waiting_for_upload.pop(user_id, None)
