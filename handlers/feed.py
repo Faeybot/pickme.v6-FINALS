@@ -194,8 +194,11 @@ async def feed_ask_photo(callback: types.CallbackQuery, state: FSMContext, db: D
     await callback.answer()
 
 
-@router.message(FeedState.waiting_photo)
+@router.message(FeedState.waiting_photo, F.photo)
 async def handle_photo_input(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
+    print("🔥🔥🔥 FEED HANDLER: handle_photo_input TERPANGGIL 🔥🔥🔥")
+    logging.info("FEED HANDLER: handle_photo_input called")
+
     try:
         await message.delete()
     except:
