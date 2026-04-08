@@ -124,6 +124,7 @@ async def main():
     # --- 6. REGISTRASI ROUTER ---
     dp.include_router(registration.router)
     dp.include_router(start.router)
+    dp.include_router(feed.router)
     dp.include_router(account.router)
     dp.include_router(status.router)
     dp.include_router(wallet.router)
@@ -132,7 +133,6 @@ async def main():
     dp.include_router(inbox.router)
     dp.include_router(unmask.router)
     dp.include_router(discovery.router)
-    dp.include_router(feed.router)
     dp.include_router(preview.router)
     dp.include_router(match.router)
     dp.include_router(who_like_me.router)
