@@ -1,47 +1,45 @@
 import os
 import html
 import logging
+import re
 import asyncio
 from aiogram import Router, F, types, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardRemove
 from services.database import DatabaseService, User
-from utils.filters import is_content_safe
+from utils.filters import is_content_safe  # opsional, jika ingin filter
 
 router = Router()
 
-
 # ==========================================
-# 1. KONFIGURASI ID & VARIABEL
+# 1. KONFIGURASI DARI ENVIRONMENT VARIABLES
 # ==========================================
 def get_int_id(key: str):
+    """Aman untuk ID negatif dan non-numeric, mengembalikan None jika tidak valid."""
     val = os.getenv(key)
-    if val and (val.startswith("-") or val.isdigit()):
-        try:
-            return int(val)
-        except:
-            return val
-    return val
-
+    if val is None:
+        return None
+    val = val.strip()
+    try:
+        return int(val)
+    except ValueError:
+        return None
 
 FEED_CHANNEL_ID = get_int_id("FEED_CHANNEL_ID")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "")
 ADMIN_FEED_GROUP_ID = get_int_id("ADMIN_FEED_GROUP_ID")
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
 
-
 class FeedState(StatesGroup):
     waiting_text = State()
     waiting_photo = State()
     waiting_anon_choice = State()
 
-
 INTEREST_MAP = {
     "int_adult": "#Adult🔞", "int_flirt": "#FlirtAndTalk🔥", "int_rel": "#Relationship❤️",
     "int_net": "#Networking🤝", "int_game": "#Gaming🎮", "int_travel": "#Traveling✈️", "int_coffee": "#Coffee☕"
 }
-
 
 # ==========================================
 # 2. FORMATTER POSTINGAN
@@ -59,16 +57,15 @@ def format_feed_post(user: User, caption: str, is_anon: bool, bot_username: str)
     gender_name = user.gender.title() if user.gender else "Rahasia"
     
     interest_hashtags = [INTEREST_MAP.get(item.strip()) for item in (user.interests or "").split(",") if INTEREST_MAP.get(item.strip())]
+    hashtags = f"📍 #{city_name} #{gender_name}\n🔥 {' '.join(interest_hashtags) if interest_hashtags else ''}"
     
-    return f"{header}\n<code>{'—' * 20}</code>\n{content}\n\n📍 #{city_name} #{gender_name}\n🔥 {' '.join(interest_hashtags) if interest_hashtags else ''}"
-
+    return f"{header}\n<code>{'—' * 20}</code>\n{content}\n\n{hashtags}"
 
 # ==========================================
 # 3. CORE UI RENDERER: FEED MENU
 # ==========================================
 async def render_feed_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseService, state: FSMContext, callback_id: str = None):
     """Menampilkan menu feed dengan kuota posting"""
-    
     # Cleanup ReplyKeyboard
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
@@ -97,49 +94,54 @@ async def render_feed_ui(bot: Bot, chat_id: int, user_id: int, db: DatabaseServi
         f"<i>Tips: Upgrade Tier untuk mendapatkan jatah posting harian lebih banyak!</i>"
     )
     
+    # Tombol preview channel (hanya jika CHANNEL_USERNAME tersedia)
     ch_user = CHANNEL_USERNAME.replace('@', '').strip() if CHANNEL_USERNAME else ""
+    preview_button = [InlineKeyboardButton(text="📺 PREVIEW CHANNEL", url=f"https://t.me/{ch_user}")] if ch_user else []
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    kb_buttons = [
         [InlineKeyboardButton(text="📝 TULIS TEKS", callback_data="feed_ask_text"),
          InlineKeyboardButton(text="📸 POSTING FOTO", callback_data="feed_ask_photo")],
-        [InlineKeyboardButton(text="🚀 BOOSTER POSTINGAN", callback_data="menu_boost")],
-        [InlineKeyboardButton(text="📺 PREVIEW CHANNEL", url=f"https://t.me/{ch_user}")],
-        [InlineKeyboardButton(text="⬅️ Kembali ke Dashboard", callback_data="back_to_dashboard")]
-    ])
+        [InlineKeyboardButton(text="🚀 BOOSTER POSTINGAN", callback_data="menu_boost")]
+    ]
+    if preview_button:
+        kb_buttons.append(preview_button)
+    kb_buttons.append([InlineKeyboardButton(text="⬅️ Kembali ke Dashboard", callback_data="back_to_dashboard")])
     
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
     media = InputMediaPhoto(media=BANNER_PHOTO_ID, caption=text, parse_mode="HTML")
     
+    # Coba edit pesan yang sudah ada (jika callback)
     if callback_id:
         try:
             await bot.edit_message_media(chat_id=chat_id, message_id=user.anchor_msg_id, media=media, reply_markup=kb)
             await bot.answer_callback_query(callback_id)
-        except:
-            pass
-    else:
-        try:
+            return
+        except Exception as e:
+            logging.warning(f"Edit feed UI gagal: {e}")
+            # fallback: kirim baru (hapus anchor lama jika perlu)
             if user.anchor_msg_id:
                 try:
-                    await bot.delete_message(chat_id=chat_id, message_id=user.anchor_msg_id)
+                    await bot.delete_message(chat_id, user.anchor_msg_id)
                 except:
                     pass
-            sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
-            await db.update_anchor_msg(user_id, sent.message_id)
-        except Exception as e:
-            logging.error(f"Gagal render Feed UI: {e}")
+                await db.update_anchor_msg(user_id, None)
+    
+    # Kirim pesan baru
+    try:
+        sent = await bot.send_photo(chat_id=chat_id, photo=BANNER_PHOTO_ID, caption=text, reply_markup=kb, parse_mode="HTML")
+        await db.update_anchor_msg(user_id, sent.message_id)
+    except Exception as e:
+        logging.error(f"Gagal render Feed UI: {e}")
     
     return True
-
 
 @router.callback_query(F.data == "menu_feed")
 async def show_feed_menu(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
     await render_feed_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
 
-
 @router.callback_query(F.data == "feed_cancel_action")
 async def cancel_feed_action(callback: types.CallbackQuery, db: DatabaseService, state: FSMContext, bot: Bot):
-    """Menangkap tombol batal dan mengembalikan ke menu Feed utama"""
     await render_feed_ui(bot, callback.message.chat.id, callback.from_user.id, db, state, callback.id)
-
 
 # ==========================================
 # 4. HANDLER INPUT TEKS & FOTO
@@ -159,7 +161,6 @@ async def feed_ask_text(callback: types.CallbackQuery, state: FSMContext, db: Da
     await state.set_state(FeedState.waiting_text)
     await callback.answer()
 
-
 @router.message(FeedState.waiting_text)
 async def handle_text_input(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
     try:
@@ -174,9 +175,14 @@ async def handle_text_input(message: types.Message, state: FSMContext, db: Datab
     if user.daily_feed_text_quota <= 0 and user.extra_feed_text_quota <= 0:
         return
     
+    # (Opsional) Filter konten sebelum potong kuota
+    # if not is_content_safe(message.text):
+    #     await message.answer("❌ Konten mengandung kata terlarang. Posting dibatalkan.")
+    #     await state.clear()
+    #     return
+    
     await state.update_data(f_type="text", f_caption=message.text)
     await ask_anon_choice(user, state, bot, message.chat.id)
-
 
 @router.callback_query(F.data == "feed_ask_photo")
 async def feed_ask_photo(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService):
@@ -186,34 +192,40 @@ async def feed_ask_photo(callback: types.CallbackQuery, state: FSMContext, db: D
     
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Batal", callback_data="feed_cancel_action")]])
     await callback.message.edit_caption(
-        caption="📸 <b>Kirim Foto berserta caption/keterangannya:</b>",
+        caption="📸 <b>Kirim Foto berserta caption/keterangannya:</b>\n\n<i>Kirim foto (bisa dengan caption) – foto akan masuk antrian moderator.</i>",
         reply_markup=kb,
         parse_mode="HTML"
     )
     await state.set_state(FeedState.waiting_photo)
     await callback.answer()
 
-
 @router.message(FeedState.waiting_photo, F.photo)
 async def handle_photo_input(message: types.Message, state: FSMContext, db: DatabaseService, bot: Bot):
-    print("🔥🔥🔥 FEED HANDLER: handle_photo_input TERPANGGIL 🔥🔥🔥")
-    logging.info("FEED HANDLER: handle_photo_input called")
-
+    # Hapus pesan user agar chat bersih
     try:
         await message.delete()
     except:
         pass
     
-    if not message.photo:
-        return
-    
     user = await db.get_user(message.from_user.id)
     if user.daily_feed_photo_quota <= 0 and user.extra_feed_photo_quota <= 0:
+        await message.answer("❌ Kuota Foto habis. Tunggu reset besok.")
+        await state.clear()
         return
     
-    await state.update_data(f_type="photo", f_file_id=message.photo[-1].file_id, f_caption=message.caption or "")
+    # Simpan data foto
+    caption_text = message.caption or ""
+    await state.update_data(f_type="photo", f_file_id=message.photo[-1].file_id, f_caption=caption_text)
     await ask_anon_choice(user, state, bot, message.chat.id)
 
+# Fallback jika user mengirim bukan foto (misal dokumen) saat waiting_photo
+@router.message(FeedState.waiting_photo)
+async def handle_non_photo_input(message: types.Message, state: FSMContext):
+    if message.document and message.document.mime_type.startswith('image/'):
+        await message.answer("❌ Kirim sebagai FOTO (bukan file). Silakan pilih 'Kirim sebagai Foto' dari galeri.")
+    else:
+        await message.answer("❌ Harap kirim FOTO, bukan teks atau file lain.")
+    await state.clear()
 
 # ==========================================
 # 5. PEMILIHAN ANONIM & EKSEKUSI
@@ -224,34 +236,37 @@ async def ask_anon_choice(user: User, state: FSMContext, bot: Bot, chat_id: int)
          InlineKeyboardButton(text="🎭 ANONIM", callback_data="anon_yes")],
         [InlineKeyboardButton(text="❌ Batal", callback_data="feed_cancel_action")]
     ])
-    
     text = "Bagaimana postingan ini ingin ditampilkan di Channel?"
-    
     try:
-        await bot.edit_message_caption(chat_id=chat_id, message_id=user.anchor_msg_id, caption=text, reply_markup=kb)
+        await bot.edit_message_caption(chat_id=chat_id, message_id=user.anchor_msg_id, caption=text, reply_markup=kb, parse_mode="HTML")
     except:
         pass
     await state.set_state(FeedState.waiting_anon_choice)
-
 
 @router.callback_query(F.data.in_(["anon_yes", "anon_no"]), FeedState.waiting_anon_choice)
 async def process_publish(callback: types.CallbackQuery, state: FSMContext, db: DatabaseService, bot: Bot):
     is_anon = (callback.data == "anon_yes")
     data = await state.get_data()
     user_id = callback.from_user.id
-    caption = data.get('f_caption', "")
+    caption = data.get('f_caption', "").strip()
     post_type = data.get('f_type')
     bot_info = await bot.get_me()
     
-    # Filter konten (opsional)
+    # Jika caption kosong untuk posting teks, tolak
+    if post_type == "text" and not caption:
+        await callback.answer("❌ Caption tidak boleh kosong!", show_alert=True)
+        return
+    
+    # (Opsional) Filter konten
     # if not is_content_safe(caption):
-    #     return await callback.answer("❌ Caption mengandung kata yang dilarang/tidak pantas!", show_alert=True)
+    #     await callback.answer("❌ Caption mengandung kata terlarang!", show_alert=True)
+    #     return
     
     async with db.session_factory() as session:
         user = await session.get(User, user_id)
         used_quota_type = ""
         
-        # PRE-DEDUCT QUOTA
+        # Potong kuota
         if post_type == "text":
             if user.daily_feed_text_quota > 0:
                 user.daily_feed_text_quota -= 1
@@ -259,7 +274,7 @@ async def process_publish(callback: types.CallbackQuery, state: FSMContext, db: 
             else:
                 user.extra_feed_text_quota -= 1
                 used_quota_type = "extra_text"
-        else:
+        else:  # photo
             if user.daily_feed_photo_quota > 0:
                 user.daily_feed_photo_quota -= 1
                 used_quota_type = "daily_photo"
@@ -272,63 +287,116 @@ async def process_publish(callback: types.CallbackQuery, state: FSMContext, db: 
         
         if post_type == "text":
             full_post = format_feed_post(user, caption, is_anon, bot_info.username)
-            await bot.send_message(FEED_CHANNEL_ID, full_post, parse_mode="HTML", disable_web_page_preview=True)
-            await callback.message.edit_caption(
-                caption="✅ <b>Postingan teks berhasil diterbitkan!</b>",
-                reply_markup=kb_done,
-                parse_mode="HTML"
-            )
+            if FEED_CHANNEL_ID:
+                await bot.send_message(FEED_CHANNEL_ID, full_post, parse_mode="HTML", disable_web_page_preview=True)
+            else:
+                logging.error("FEED_CHANNEL_ID tidak diset, postingan teks gagal.")
+                await callback.message.edit_caption("❌ Gagal mempublikasikan. Hubungi admin.", reply_markup=kb_done)
+                await state.clear()
+                return
+            await callback.message.edit_caption("✅ <b>Postingan teks berhasil diterbitkan!</b>", reply_markup=kb_done, parse_mode="HTML")
             await state.clear()
         else:
+            # --- Posting foto: kirim ke grup moderator ---
+            if not caption:
+                caption = "(Tidak ada caption)"
             anon_tag = "1" if is_anon else "0"
-            kb_admin = InlineKeyboardMarkup(inline_keyboard=[[
+            admin_kb = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="✅ TERBITKAN", callback_data=f"apv_f_{user_id}_{anon_tag}"),
                 InlineKeyboardButton(text="❌ TOLAK", callback_data=f"rej_f_{user_id}_{used_quota_type}")
             ]])
-            admin_text = f"📸 <b>REVIEW FOTO FEED</b>\n👤 Pembuat: {user.full_name}\n🎭 Tampil: <b>{'ANON' if is_anon else 'PUBLIK'}</b>\n📝 <b>Caption:</b>\n{html.escape(caption)}"
-            
-            await bot.send_photo(ADMIN_FEED_GROUP_ID, photo=data['f_file_id'], caption=admin_text, reply_markup=kb_admin, parse_mode="HTML")
-            await callback.message.edit_caption(
-                caption="⏳ <b>Postingan foto sedang dalam tinjauan Admin.</b>\nJika ditolak, kuota akan dikembalikan.",
-                reply_markup=kb_done,
-                parse_mode="HTML"
+            admin_text = (
+                f"📸 <b>REVIEW FOTO FEED</b>\n"
+                f"👤 Pembuat: {user.full_name}\n"
+                f"🎭 Tampil: <b>{'ANON' if is_anon else 'PUBLIK'}</b>\n"
+                f"📝 <b>Caption:</b>\n{html.escape(caption)}"
             )
-            await state.clear()
-    
+            try:
+                if not ADMIN_FEED_GROUP_ID:
+                    raise ValueError("ADMIN_FEED_GROUP_ID tidak diset")
+                await bot.send_photo(ADMIN_FEED_GROUP_ID, photo=data['f_file_id'], caption=admin_text, reply_markup=admin_kb, parse_mode="HTML")
+                await callback.message.edit_caption(
+                    "⏳ <b>Postingan foto sedang dalam tinjauan Admin.</b>\nJika ditolak, kuota akan dikembalikan.",
+                    reply_markup=kb_done,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logging.error(f"Gagal kirim ke admin group: {e}")
+                # Kembalikan kuota
+                if used_quota_type == "daily_photo":
+                    user.daily_feed_photo_quota += 1
+                elif used_quota_type == "extra_photo":
+                    user.extra_feed_photo_quota += 1
+                await session.commit()
+                await callback.message.edit_caption(
+                    f"❌ Gagal mengirim foto ke moderator. Error: {str(e)}",
+                    reply_markup=kb_done,
+                    parse_mode="HTML"
+                )
+            finally:
+                await state.clear()
     await callback.answer()
 
-
 # ==========================================
-# 6. MODERASI ADMIN (Approve / Reject)
+# 6. MODERASI ADMIN (APPROVE / REJECT)
 # ==========================================
 @router.callback_query(F.data.startswith("apv_f_"))
 async def handle_approve_feed(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     parts = callback.data.split("_")
-    user_id, is_anon = int(parts[2]), (parts[3] == "1")
+    if len(parts) < 3:
+        return await callback.answer("Data tidak valid.")
+    user_id = int(parts[2])
+    is_anon = (parts[3] == "1") if len(parts) > 3 else False
+    
     user = await db.get_user(user_id)
     if not user:
-        return await callback.answer("❌ User Hilang.")
+        return await callback.answer("❌ User tidak ditemukan.")
     
-    try:
-        original_caption = callback.message.caption.split("📝 <b>Caption:</b>\n")[1].strip() if "📝 <b>Caption:</b>\n" in callback.message.caption else ""
-        bot_info = await bot.get_me()
-        full_post = format_feed_post(user, original_caption, is_anon, bot_info.username)
-        
+    # Ekstrak caption dari pesan admin
+    original_caption = ""
+    caption_marker = "📝 <b>Caption:</b>\n"
+    if caption_marker in callback.message.caption:
+        # Ambil setelah marker
+        temp = callback.message.caption.split(caption_marker, 1)[1].strip()
+        # Hapus bagian yang mungkin ditambahkan admin setelahnya (misal ✅ APPROVED)
+        if "\n\n✅" in temp:
+            original_caption = temp.split("\n\n✅")[0].strip()
+        else:
+            original_caption = temp
+    else:
+        # Fallback dengan regex
+        match = re.search(r"📝 <b>Caption:</b>\n(.*?)(?:\n\n|$)", callback.message.caption, re.DOTALL)
+        if match:
+            original_caption = match.group(1).strip()
+    
+    if not original_caption:
+        original_caption = "(Tidak ada caption)"
+    
+    logging.info(f"DEBUG: original_caption = '{original_caption}'")
+    bot_info = await bot.get_me()
+    full_post = format_feed_post(user, original_caption, is_anon, bot_info.username)
+    
+    if FEED_CHANNEL_ID:
         await bot.send_photo(FEED_CHANNEL_ID, photo=callback.message.photo[-1].file_id, caption=full_post, parse_mode="HTML")
-        try:
-            await bot.send_message(user_id, "🎉 <b>POSTINGAN FOTO TERBIT!</b> Foto kamu telah disetujui admin.", parse_mode="HTML")
-        except:
-            pass
-        
-        await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ <b>APPROVED</b>", reply_markup=None)
-    except Exception as e:
-        await callback.answer(f"Error: {e}", show_alert=True)
-
+    else:
+        logging.error("FEED_CHANNEL_ID tidak diset")
+    
+    # Notifikasi ke user
+    try:
+        await bot.send_message(user_id, "🎉 <b>POSTINGAN FOTO TERBIT!</b> Foto kamu telah disetujui admin.", parse_mode="HTML")
+    except:
+        pass
+    
+    await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ <b>APPROVED</b>", reply_markup=None)
+    await callback.answer("Postingan disetujui.")
 
 @router.callback_query(F.data.startswith("rej_f_"))
 async def handle_reject_feed(callback: types.CallbackQuery, db: DatabaseService, bot: Bot):
     parts = callback.data.split("_")
-    user_id, quota_info = int(parts[2]), parts[3]
+    if len(parts) < 3:
+        return await callback.answer("Data tidak valid.")
+    user_id = int(parts[2])
+    quota_info = parts[3] if len(parts) > 3 else "daily_photo"
     
     async with db.session_factory() as session:
         u = await session.get(User, user_id)
@@ -340,7 +408,7 @@ async def handle_reject_feed(callback: types.CallbackQuery, db: DatabaseService,
             await session.commit()
     
     try:
-        await bot.send_message(user_id, "❌ <b>POSTINGAN DITOLAK.</b>\nFoto kamu tidak memenuhi panduan komunitas. Kuota foto telah dikembalikan ke akunmu.", parse_mode="HTML")
+        await bot.send_message(user_id, "❌ <b>POSTINGAN DITOLAK.</b>\nFoto kamu tidak memenuhi panduan komunitas. Kuota foto telah dikembalikan.", parse_mode="HTML")
     except:
         pass
     
