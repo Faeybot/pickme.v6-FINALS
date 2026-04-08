@@ -9,6 +9,7 @@ from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, 
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InputMediaPhoto
 )
+from handlers.feed import FeedState
 from services.database import DatabaseService
 
 router = Router()
@@ -672,24 +673,29 @@ async def handle_extra_2(callback: types.CallbackQuery):
 # ==========================================
 # HANDLER UNTUK SEMUA FOTO YANG DIKIRIM (GALLERY ATAU FILE)
 # ==========================================
-@router.message()
-async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bot):
-    """Menangkap semua upload foto (dari Gallery ATAU File)"""
+
+@router.message(F.photo)
+async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bot, state: FSMContext):
+    """Menangkap semua upload foto dari galeri (bukan dari feed)"""
     import logging
     import asyncio
+    
+    # 🔥 PERBAIKAN: Jika sedang dalam proses posting feed, lewati
+    current_state = await state.get_state()
+    if current_state == FeedState.waiting_photo:
+        # Biarkan handler feed yang memproses
+        return
     
     # Cari photo_id dari berbagai kemungkinan
     photo_id = None
     source_type = None
     
     if message.photo:
-        # Upload dari Gallery
         photo_id = message.photo[-1].file_id
         source_type = "gallery"
         logging.info(f"📸 FOTO dari GALLERY: {photo_id[:30]}...")
         
     elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
-        # Upload sebagai File (gambar)
         photo_id = message.document.file_id
         source_type = "file"
         logging.info(f"📸 FOTO sebagai FILE: {photo_id[:30]}...")
@@ -714,7 +720,6 @@ async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bo
     
     try:
         if action == "main":
-            # Update foto utama
             async with db.session_factory() as session:
                 from services.database import User as UserTable
                 user = await session.get(UserTable, user_id)
@@ -728,7 +733,6 @@ async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bo
                     return
             
         elif action == "extra_1":
-            # Update foto extra 1
             async with db.session_factory() as session:
                 from services.database import User as UserTable
                 user = await session.get(UserTable, user_id)
@@ -747,20 +751,17 @@ async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bo
                     return
             
         elif action == "extra_2":
-            # Update foto extra 2
             async with db.session_factory() as session:
                 from services.database import User as UserTable
                 user = await session.get(UserTable, user_id)
                 if user:
                     extra = list(user.extra_photos or [])
-                    # Pastikan album 1 ada jika album 2 diisi
                     if len(extra) < 1:
                         extra.append(None)
                     if len(extra) >= 2:
                         extra[1] = photo_id
                     else:
                         extra.append(photo_id)
-                    # Bersihkan None
                     extra = [x for x in extra if x is not None]
                     user.extra_photos = extra
                     await session.commit()
@@ -787,13 +788,13 @@ async def handle_all_photos(message: types.Message, db: DatabaseService, bot: Bo
         await asyncio.sleep(1.5)
         
         # Kembali ke galeri foto
+        from handlers.account import render_gallery_ui
         await render_gallery_ui(bot, message.chat.id, user_id, db)
         
     except Exception as e:
         logging.error(f"📸 ERROR: {e}")
         await message.answer(f"❌ Gagal menyimpan foto. Silakan coba lagi.\n\nError: {str(e)[:100]}", parse_mode="HTML")
         waiting_for_upload.pop(user_id, None)
-
 
 # ==========================================
 # HAPUS SEMUA FOTO ALBUM
