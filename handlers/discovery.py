@@ -13,6 +13,7 @@ from sqlalchemy import select, and_, not_
 
 from services.database import DatabaseService, User as UserTable, SwipeHistory
 from services.notification import NotificationService
+from utils.helpers import send_temp_message
 
 router = Router()
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
@@ -437,11 +438,11 @@ async def handle_swipe(callback: types.CallbackQuery, state: FSMContext, db: Dat
             await db.process_match_logic(user_id, target_id)
             user_a, user_b = await db.get_user(user_id), await db.get_user(target_id)
             try:
-                await bot.send_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_a.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
+                await bot.send_temp_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_a.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
             except:
                 pass
             try:
-                await bot.send_message(user_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_b.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
+                await bot.send_temp_message(user_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_b.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
             except:
                 pass
             await callback.answer("🎉 IT'S A MATCH! Cek menu Notifikasi!", show_alert=True)
