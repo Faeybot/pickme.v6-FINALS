@@ -174,7 +174,7 @@ async def handle_like_from_view(callback: types.CallbackQuery, db: DatabaseServi
         except:
             pass
         try:
-            await bot.send_message(user_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_b.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
+            await bot.send_temp_message(user_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_b.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
         except:
             pass
         await callback.answer("🎉 IT'S A MATCH! Cek menu Match!", show_alert=True)
