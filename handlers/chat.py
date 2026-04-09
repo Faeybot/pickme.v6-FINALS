@@ -12,6 +12,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     InputMediaPhoto
 )
+from sqlalchemy import select  # 🔥 Tambahan import yang hilang
 
 from services.database import DatabaseService
 from services.notification import NotificationService
@@ -22,7 +23,7 @@ class ChatState(StatesGroup):
     in_room = State()
 
 # ==========================================
-# 1. HELPER: RENDER HISTORY TEXT (dengan timestamp)
+# 1. HELPER: RENDER HISTORY TEXT
 # ==========================================
 def render_history_text(history_list, limit=15):
     if not history_list:
@@ -37,10 +38,9 @@ def render_history_text(history_list, limit=15):
     return "\n".join(lines)
 
 # ==========================================
-# 2. FUNGSI UPDATE HEADER (auto-refresh history)
+# 2. FUNGSI UPDATE HEADER (aman untuk anchor_msg_id None)
 # ==========================================
 async def update_chat_header(bot: Bot, user_id: int, target_id: int, db: DatabaseService):
-    """Update header chat room dengan history terbaru (menggunakan anchor_msg_id)"""
     user = await db.get_user(user_id)
     if not user or not user.anchor_msg_id:
         return
@@ -94,7 +94,7 @@ async def update_chat_header(bot: Bot, user_id: int, target_id: int, db: Databas
         logging.warning(f"Gagal update header: {e}")
 
 # ==========================================
-# 3. FUNGSI UTAMA: START CHAT ROOM (dengan threading)
+# 3. FUNGSI UTAMA: START CHAT ROOM (dengan thread_id)
 # ==========================================
 async def start_chat_room(
     bot: Bot,
@@ -112,7 +112,7 @@ async def start_chat_room(
         await bot.send_message(chat_id, "❌ Sesi obrolan tidak ditemukan atau sudah berakhir.")
         return
     
-    # Cleanup pesan sebelumnya jika ada
+    # Cleanup
     if message_id:
         try:
             await bot.delete_message(chat_id, message_id)
@@ -127,7 +127,6 @@ async def start_chat_room(
         except:
             pass
     
-    # History
     history = await db.get_chat_history(user_id, target_id, limit=20)
     history_text = render_history_text(history, limit=12)
     
@@ -173,7 +172,6 @@ async def start_chat_room(
         one_time_keyboard=False
     )
     
-    # Kirim header (foto + caption). Ini akan menjadi root thread.
     sent_header = await bot.send_photo(
         chat_id=chat_id,
         photo=target.photo_id,
@@ -182,7 +180,6 @@ async def start_chat_room(
         parse_mode="HTML"
     )
     
-    # Kirim instruksi + ReplyKeyboard (bisa juga sebagai reply ke header, tapi tidak perlu)
     sent_instruction = await bot.send_message(
         chat_id,
         "✍️ <i>Ketik pesanmu di bawah. Gunakan tombol di bawah layar untuk keluar.</i>",
@@ -190,9 +187,8 @@ async def start_chat_room(
         parse_mode="HTML"
     )
     
-    # Simpan thread_id = message_id header
     thread_id = sent_header.message_id
-    # Update thread_id di database
+    # Update thread_id di database jika belum ada
     async with db.session_factory() as session:
         from services.database import ChatSession
         stmt = select(ChatSession).where(
@@ -201,11 +197,10 @@ async def start_chat_room(
         )
         result = await session.execute(stmt)
         sess = result.scalar_one_or_none()
-        if sess:
+        if sess and not sess.thread_id:
             sess.thread_id = thread_id
             await session.commit()
     
-    # Simpan state
     await state.update_data(
         current_target_id=target_id,
         header_msg_id=sent_header.message_id,
@@ -214,11 +209,8 @@ async def start_chat_room(
         thread_id=thread_id
     )
     
-    # Simpan nav_stack
     await db.push_nav(user_id, f"chat_room_{target_id}")
-    # Simpan anchor_msg_id untuk update header nanti
     await db.update_anchor_msg(user_id, sent_header.message_id)
-    
     await state.set_state(ChatState.in_room)
 
 # ==========================================
@@ -233,10 +225,18 @@ async def start_chat_from_callback(
 ):
     parts = callback.data.split("_")
     if len(parts) >= 3:
-        target_id = int(parts[1])
+        try:
+            target_id = int(parts[1])
+        except:
+            await callback.answer("❌ Data tidak valid.", show_alert=True)
+            return
         origin = parts[2]
     else:
-        target_id = int(parts[1])
+        try:
+            target_id = int(parts[1])
+        except:
+            await callback.answer("❌ Data tidak valid.", show_alert=True)
+            return
         origin = "public"
     
     user_id = callback.from_user.id
@@ -289,13 +289,22 @@ async def start_chat_from_callback(
     await start_chat_room(bot, callback.message.chat.id, user_id, target_id, db, state, callback.message.message_id)
 
 # ==========================================
-# 5. HANDLER: LOAD HISTORY
+# 5. HANDLER: LOAD HISTORY (dengan parsing aman)
 # ==========================================
 @router.callback_query(F.data.startswith("chat_load_"))
 async def handle_load_history(callback: types.CallbackQuery, db: DatabaseService):
     parts = callback.data.split("_")
-    target_id = int(parts[2])
-    limit = int(parts[3])
+    # Format: chat_load_{target_id}_{limit}
+    if len(parts) < 3:
+        await callback.answer("❌ Data tidak valid.")
+        return
+    try:
+        target_id = int(parts[2])
+        limit = int(parts[3])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Data tidak valid.")
+        return
+    
     user_id = callback.from_user.id
     history = await db.get_chat_history(user_id, target_id, limit=limit)
     history_text = render_history_text(history, limit=limit)
@@ -310,7 +319,7 @@ async def handle_load_history(callback: types.CallbackQuery, db: DatabaseService
     await callback.answer()
 
 # ==========================================
-# 6. HANDLER: PROSES PESAN DI RUANG CHAT (dengan threading & poin)
+# 6. HANDLER: PROSES PESAN DI RUANG CHAT
 # ==========================================
 @router.message(ChatState.in_room, F.text != "🛑 AKHIRI OBROLAN")
 async def process_chat_relay(
@@ -333,7 +342,7 @@ async def process_chat_relay(
     if not message.text:
         return
     
-    # Kirim typing indicator ke target
+    # Typing indicator
     try:
         await bot.send_chat_action(target_id, action='typing')
     except:
@@ -342,7 +351,7 @@ async def process_chat_relay(
     # Simpan history
     chat_sess = await db.add_chat_history(user.id, target_id, user.full_name, message.text)
     
-    # Kirim pesan ke target sebagai reply ke thread_id
+    # Kirim pesan ke target
     target_text = f"<b>{user.full_name}:</b>\n<blockquote>{html.escape(message.text)}</blockquote>"
     target_user = await db.get_user(target_id)
     is_target_in_room = False
@@ -351,15 +360,16 @@ async def process_chat_relay(
     
     if is_target_in_room:
         try:
-            await bot.send_message(target_id, target_text, reply_to_message_id=thread_id, parse_mode="HTML")
-        except:
-            # fallback tanpa reply
-            await bot.send_message(target_id, target_text, parse_mode="HTML")
+            if thread_id:
+                await bot.send_message(target_id, target_text, reply_to_message_id=thread_id, parse_mode="HTML")
+            else:
+                await bot.send_message(target_id, target_text, parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Gagal kirim pesan ke target: {e}")
     else:
-        # Hanya notifikasi (tidak kirim pesan langsung)
         await notif_service.trigger_new_message(target_id, user.id, user.full_name, is_reply=True)
     
-    # ========== SISTEM POIN ==========
+    # Sistem poin
     current_sess = await db.get_active_chat_session(user.id, target_id)
     origin = current_sess.origin if current_sess else "public"
     session_id = current_sess.id if current_sess else None
@@ -381,22 +391,31 @@ async def process_chat_relay(
                 except:
                     pass
     
-    # Tampilkan bubble di room sendiri (juga sebagai reply ke thread_id)
-    sent_bubble = await message.answer(
-        f"<b>Anda:</b>\n{html.escape(message.text)}",
-        reply_to_message_id=thread_id,
-        parse_mode="HTML"
-    )
+    # Bubble untuk pengirim
+    try:
+        if thread_id:
+            sent_bubble = await message.answer(
+                f"<b>Anda:</b>\n{html.escape(message.text)}",
+                reply_to_message_id=thread_id,
+                parse_mode="HTML"
+            )
+        else:
+            sent_bubble = await message.answer(
+                f"<b>Anda:</b>\n{html.escape(message.text)}",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        sent_bubble = await message.answer(f"<b>Anda:</b>\n{html.escape(message.text)}", parse_mode="HTML")
     
     sweep_list = data.get('sweep_list', [])
     sweep_list.append(sent_bubble.message_id)
     await state.update_data(sweep_list=sweep_list)
     
-    # Auto-refresh header untuk kedua user
+    # Refresh header
     await update_chat_header(bot, user.id, target_id, db)
     await update_chat_header(bot, target_id, user.id, db)
     
-    # Log ke channel admin (jika diset)
+    # Log admin ke channel
     admin_log_channel = os.getenv("CHAT_LOG_CHANNEL_ID")
     if admin_log_channel and chat_sess and chat_sess.thread_id:
         try:
@@ -417,21 +436,13 @@ async def exit_chat_room(message: types.Message, state: FSMContext, db: Database
     header_msg_id = data.get('header_msg_id')
     instruction_msg_id = data.get('instruction_msg_id')
     
-    if header_msg_id:
-        try:
-            await bot.delete_message(chat_id, header_msg_id)
-        except:
-            pass
-    if instruction_msg_id:
-        try:
-            await bot.delete_message(chat_id, instruction_msg_id)
-        except:
-            pass
-    for msg_id in sweep_list:
-        try:
-            await bot.delete_message(chat_id, msg_id)
-        except:
-            pass
+    # Hapus semua pesan
+    for msg_id in [header_msg_id, instruction_msg_id] + sweep_list:
+        if msg_id:
+            try:
+                await bot.delete_message(chat_id, msg_id)
+            except:
+                pass
     try:
         await message.delete()
     except:
@@ -459,21 +470,12 @@ async def exit_to_dashboard_from_chat(message: types.Message, state: FSMContext,
     header_msg_id = data.get('header_msg_id')
     instruction_msg_id = data.get('instruction_msg_id')
     
-    if header_msg_id:
-        try:
-            await bot.delete_message(chat_id, header_msg_id)
-        except:
-            pass
-    if instruction_msg_id:
-        try:
-            await bot.delete_message(chat_id, instruction_msg_id)
-        except:
-            pass
-    for msg_id in sweep_list:
-        try:
-            await bot.delete_message(chat_id, msg_id)
-        except:
-            pass
+    for msg_id in [header_msg_id, instruction_msg_id] + sweep_list:
+        if msg_id:
+            try:
+                await bot.delete_message(chat_id, msg_id)
+            except:
+                pass
     try:
         temp_msg = await bot.send_message(chat_id, "🔄", reply_markup=ReplyKeyboardRemove())
         await bot.delete_message(chat_id, temp_msg.message_id)
