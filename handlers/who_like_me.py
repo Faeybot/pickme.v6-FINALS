@@ -3,6 +3,7 @@ import math
 from aiogram import Router, F, types, Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardRemove
 from services.database import DatabaseService
+from utils.helpers import send_temp_message
 
 router = Router()
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
@@ -170,7 +171,7 @@ async def handle_wlm_action(callback: types.CallbackQuery, db: DatabaseService, 
         if is_matched:
             await callback.answer("🎉 IT'S A MATCH! Kalian sekarang bisa saling berkirim pesan.", show_alert=True)
             try:
-                await bot.send_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nSeseorang baru saja membalas Like-mu! Cek menu Match sekarang.", parse_mode="HTML")
+                await bot.send_temp_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nSeseorang baru saja membalas Like-mu! Cek menu Match sekarang.", parse_mode="HTML")
             except:
                 pass
         else:
