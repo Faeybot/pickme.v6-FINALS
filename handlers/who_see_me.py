@@ -3,6 +3,7 @@ import math
 from aiogram import Router, F, types, Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, ReplyKeyboardRemove
 from services.database import DatabaseService
+from utils.helpers import send_temp_message
 
 router = Router()
 BANNER_PHOTO_ID = os.getenv("BANNER_PHOTO_ID")
@@ -169,7 +170,7 @@ async def handle_like_from_view(callback: types.CallbackQuery, db: DatabaseServi
     if is_match:
         user_a, user_b = await db.get_user(user_id), await db.get_user(target_id)
         try:
-            await bot.send_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_a.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
+            await bot.send_temp_message(target_id, f"🎉 <b>IT'S A MATCH!</b>\nKamu saling suka dengan <b>{user_a.full_name.upper()}</b>!\nSilakan cek menu <b>Notifikasi > Match</b> untuk mulai mengobrol gratis.", parse_mode="HTML")
         except:
             pass
         try:
