@@ -22,12 +22,13 @@ class ChatState(StatesGroup):
     in_room = State()
 
 # ==========================================
-# 1. KIRIM HISTORY (50 PESAN TERAKHIR)
+# 1. KIRIM 50 PESAN HISTORY (SEBAGAI BUBBLE TERPISAH)
 # ==========================================
 async def send_history_messages(bot: Bot, chat_id: int, user_id: int, target_id: int, db: DatabaseService):
-    """Kirim 50 pesan history terakhir sebagai pesan terpisah (dari yang tertua ke terbaru)"""
+    """Kirim 50 pesan history terakhir sebagai pesan terpisah (dari tertua ke terbaru)"""
     history = await db.get_chat_history(user_id, target_id, limit=50)
     if not history:
+        await bot.send_message(chat_id, "💬 <i>Belum ada percakapan. Kirim pesan pertama!</i>", parse_mode="HTML")
         return
     for entry in history:
         sender = entry.get('s', '?')
@@ -36,18 +37,17 @@ async def send_history_messages(bot: Bot, chat_id: int, user_id: int, target_id:
         await asyncio.sleep(0.05)  # jeda kecil agar tidak flood
 
 # ==========================================
-# 2. UPDATE HEADER (INFO PROFIL & SISA WAKTU)
+# 2. UPDATE HEADER (INFO PROFIL & SISA WAKTU, TANPA HISTORY)
 # ==========================================
 async def update_chat_header(bot: Bot, user_id: int, target_id: int, db: DatabaseService):
     user = await db.get_user(user_id)
     if not user or not user.anchor_msg_id:
         return
-    
     target = await db.get_user(target_id)
     chat_sess = await db.get_active_chat_session(user_id, target_id)
     if not target or not chat_sess:
         return
-    
+
     now_ts = int(datetime.datetime.now().timestamp())
     if chat_sess.expires_at > now_ts:
         diff = chat_sess.expires_at - now_ts
@@ -58,7 +58,7 @@ async def update_chat_header(bot: Bot, user_id: int, target_id: int, db: Databas
     else:
         time_left = "Habis"
         status_icon = "🔴"
-    
+
     if target.is_vip_plus:
         kasta = "💎 VIP+"
     elif target.is_vip:
@@ -67,7 +67,7 @@ async def update_chat_header(bot: Bot, user_id: int, target_id: int, db: Databas
         kasta = "🎭 PREMIUM"
     else:
         kasta = "👤 FREE"
-    
+
     header_caption = (
         f"💬 <b>OBROLAN: {target.full_name.upper()}</b>\n"
         f"{status_icon} Status: {kasta} | 📍 {target.location_name}\n"
@@ -75,7 +75,7 @@ async def update_chat_header(bot: Bot, user_id: int, target_id: int, db: Databas
         f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
         f"<i>Gunakan tombol di bawah layar untuk keluar.</i>"
     )
-    
+
     try:
         await bot.edit_message_caption(
             chat_id=user_id,
@@ -100,18 +100,17 @@ async def start_chat_room(
 ):
     target = await db.get_user(target_id)
     chat_sess = await db.get_active_chat_session(user_id, target_id)
-    
+
     if not target or not chat_sess:
         await bot.send_message(chat_id, "❌ Sesi obrolan tidak ditemukan atau sudah berakhir.")
         return
-    
-    # Cleanup pesan sebelumnya
+
+    # Cleanup
     if message_id:
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-    
     data = await state.get_data()
     old_sweep = data.get('sweep_list', [])
     for msg_id in old_sweep:
@@ -119,17 +118,8 @@ async def start_chat_room(
             await bot.delete_message(chat_id, msg_id)
         except:
             pass
-    
-    # Header profil
-    if target.is_vip_plus:
-        kasta = "💎 VIP+"
-    elif target.is_vip:
-        kasta = "🌟 VIP"
-    elif target.is_premium:
-        kasta = "🎭 PREMIUM"
-    else:
-        kasta = "👤 FREE"
-    
+
+    # Header
     now_ts = int(datetime.datetime.now().timestamp())
     if chat_sess.expires_at > now_ts:
         diff = chat_sess.expires_at - now_ts
@@ -140,7 +130,16 @@ async def start_chat_room(
     else:
         time_left = "Habis"
         status_icon = "🔴"
-    
+
+    if target.is_vip_plus:
+        kasta = "💎 VIP+"
+    elif target.is_vip:
+        kasta = "🌟 VIP"
+    elif target.is_premium:
+        kasta = "🎭 PREMIUM"
+    else:
+        kasta = "👤 FREE"
+
     header_caption = (
         f"💬 <b>OBROLAN: {target.full_name.upper()}</b>\n"
         f"{status_icon} Status: {kasta} | 📍 {target.location_name}\n"
@@ -148,55 +147,38 @@ async def start_chat_room(
         f"<code>━━━━━━━━━━━━━━━━━━━━━━</code>\n"
         f"<i>Gunakan tombol di bawah layar untuk keluar.</i>"
     )
-    
+
     kb_exit = ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🛑 AKHIRI OBROLAN")]],
         resize_keyboard=True,
         one_time_keyboard=False
     )
-    
-    # Kirim header (tanpa tombol inline)
+
     sent_header = await bot.send_photo(
         chat_id=chat_id,
         photo=target.photo_id,
         caption=header_caption,
         parse_mode="HTML"
     )
-    
-    # Kirim instruksi
+
     sent_instruction = await bot.send_message(
         chat_id,
         "✍️ <i>Ketik pesanmu di bawah. Gunakan tombol di bawah layar untuk keluar.</i>",
         reply_markup=kb_exit,
         parse_mode="HTML"
     )
-    
-    thread_id = sent_header.message_id
-    # Simpan thread_id ke database
-    async with db.session_factory() as session:
-        from services.database import ChatSession
-        stmt = select(ChatSession).where(
-            ((ChatSession.user_id == user_id) & (ChatSession.target_id == target_id)) |
-            ((ChatSession.user_id == target_id) & (ChatSession.target_id == user_id))
-        )
-        result = await session.execute(stmt)
-        sess = result.scalar_one_or_none()
-        if sess and not sess.thread_id:
-            sess.thread_id = thread_id
-            await session.commit()
-    
-    # Kirim 50 pesan history terakhir
-    await send_history_messages(bot, chat_id, user_id, target_id, db)
-    
-    # Simpan state
+
     await state.update_data(
         current_target_id=target_id,
         header_msg_id=sent_header.message_id,
         instruction_msg_id=sent_instruction.message_id,
-        sweep_list=[sent_header.message_id, sent_instruction.message_id],
-        thread_id=thread_id
+        sweep_list=[sent_header.message_id, sent_instruction.message_id]
     )
-    
+
+    # Kirim 50 history bubble
+    await send_history_messages(bot, chat_id, user_id, target_id, db)
+
+    # 🔥 Tandai sedang chat room
     await db.push_nav(user_id, f"chat_room_{target_id}")
     await db.update_anchor_msg(user_id, sent_header.message_id)
     await state.set_state(ChatState.in_room)
@@ -226,16 +208,16 @@ async def start_chat_from_callback(
             await callback.answer("❌ Data tidak valid.", show_alert=True)
             return
         origin = "public"
-    
+
     user_id = callback.from_user.id
     target = await db.get_user(target_id)
     if not target:
         await callback.answer("❌ Profil tidak ditemukan!", show_alert=True)
         return
-    
+
     chat_sess = await db.get_active_chat_session(user_id, target_id)
     now_ts = int(datetime.datetime.now().timestamp())
-    
+
     if not chat_sess or chat_sess.expires_at <= now_ts:
         user = await db.get_user(user_id)
         if origin in ["discovery", "public", "feed"]:
@@ -271,13 +253,13 @@ async def start_chat_from_callback(
                 duration_hrs = 48 if user.is_vip_plus else 24
                 expires_at = int((datetime.datetime.now() + datetime.timedelta(hours=duration_hrs)).timestamp())
                 await db.upsert_chat_session(user_id, target_id, expires_at, origin="public")
-    
+
     await db.mark_notif_read(user_id, target_id, "CHAT")
     await callback.answer("⏳ Membuka ruang obrolan...")
     await start_chat_room(bot, callback.message.chat.id, user_id, target_id, db, state, callback.message.message_id)
 
 # ==========================================
-# 5. PROSES PESAN (NATURAL, TANPA HAPUS PESAN USER)
+# 5. PROSES PESAN (REAL-TIME, TANPA THREADING)
 # ==========================================
 @router.message(ChatState.in_room, F.text != "🛑 AKHIRI OBROLAN")
 async def process_chat_relay(
@@ -288,45 +270,28 @@ async def process_chat_relay(
 ):
     data = await state.get_data()
     target_id = data.get('current_target_id')
-    thread_id = data.get('thread_id')
     user = await db.get_user(message.from_user.id)
     notif_service = NotificationService(bot, db)
-    
+
     if not message.text:
         return
-    
-    # Typing indicator
-    try:
-        await bot.send_chat_action(target_id, action='typing')
-    except:
-        pass
-    
-    # Simpan history
+
+    # Simpan history ke database
     chat_sess = await db.add_chat_history(user.id, target_id, user.full_name, message.text)
-    
-    # Kirim pesan ke target
+
+    # Kirim pesan ke target (REAL TIME)
     target_text = f"<b>{user.full_name}:</b>\n<blockquote>{html.escape(message.text)}</blockquote>"
-    target_user = await db.get_user(target_id)
-    is_target_in_room = False
-    if target_user and target_user.nav_stack:
-        is_target_in_room = target_user.nav_stack[-1] == f"chat_room_{user.id}"
-    
-    if is_target_in_room:
-        try:
-            if thread_id:
-                await bot.send_message(target_id, target_text, reply_to_message_id=thread_id, parse_mode="HTML")
-            else:
-                await bot.send_message(target_id, target_text, parse_mode="HTML")
-        except Exception as e:
-            logging.error(f"Gagal kirim pesan ke target: {e}")
-    else:
-        await notif_service.trigger_new_message(target_id, user.id, user.full_name, is_reply=True)
-    
-    # Poin
+    try:
+        await bot.send_message(target_id, target_text, parse_mode="HTML")
+        logging.info(f"Pesan dari {user.id} ke {target_id} terkirim")
+    except Exception as e:
+        logging.error(f"Gagal kirim pesan ke {target_id}: {e}")
+
+    # ========== SISTEM POIN ==========
     current_sess = await db.get_active_chat_session(user.id, target_id)
     origin = current_sess.origin if current_sess else "public"
     session_id = current_sess.id if current_sess else None
-    
+
     if origin not in ["match", "unmask"] and session_id:
         first_msg_key = f"first_msg_{session_id}"
         if not await db.check_bonus_exists(first_msg_key):
@@ -343,14 +308,14 @@ async def process_chat_relay(
                     await bot.send_message(user.id, "🎉 +200 Poin (Balasan pertama!)", parse_mode="HTML")
                 except:
                     pass
-    
-    # Update header untuk kedua user
+
+    # Update header untuk kedua user (sisa waktu)
     await update_chat_header(bot, user.id, target_id, db)
     await update_chat_header(bot, target_id, user.id, db)
-    
+
     # Log admin (opsional)
     admin_log_channel = os.getenv("CHAT_LOG_CHANNEL_ID")
-    if admin_log_channel and chat_sess and chat_sess.thread_id:
+    if admin_log_channel and chat_sess:
         try:
             admin_log = f"💬 <b>CHAT RELAY</b>\nFrom: <code>{user.id}</code> To: <code>{target_id}</code>\nMsg: {message.text[:200]}"
             await bot.send_message(admin_log_channel, admin_log, parse_mode="HTML")
@@ -368,7 +333,7 @@ async def exit_chat_room(message: types.Message, state: FSMContext, db: Database
     sweep_list = data.get('sweep_list', [])
     header_msg_id = data.get('header_msg_id')
     instruction_msg_id = data.get('instruction_msg_id')
-    
+
     for msg_id in [header_msg_id, instruction_msg_id] + sweep_list:
         if msg_id:
             try:
@@ -384,7 +349,7 @@ async def exit_chat_room(message: types.Message, state: FSMContext, db: Database
         await bot.delete_message(chat_id, temp_msg.message_id)
     except:
         pass
-    
+
     await db.pop_nav(user_id)
     await state.clear()
     from handlers.inbox import render_inbox_list
@@ -401,7 +366,7 @@ async def exit_to_dashboard_from_chat(message: types.Message, state: FSMContext,
     sweep_list = data.get('sweep_list', [])
     header_msg_id = data.get('header_msg_id')
     instruction_msg_id = data.get('instruction_msg_id')
-    
+
     for msg_id in [header_msg_id, instruction_msg_id] + sweep_list:
         if msg_id:
             try:
@@ -413,7 +378,7 @@ async def exit_to_dashboard_from_chat(message: types.Message, state: FSMContext,
         await bot.delete_message(chat_id, temp_msg.message_id)
     except:
         pass
-    
+
     await db.pop_nav(user_id)
     await state.clear()
     from handlers.start import render_dashboard_ui
