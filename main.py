@@ -10,37 +10,46 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeDefault
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeAllGroupChats,
+)
 
 # --- 1. IMPORT SERVICES ---
 from services.database import DatabaseService
 from services.payment import PaymentService
 from services.notification import NotificationService
 
-# --- 2. IMPORT HANDLERS (Disesuaikan dengan file yang ada) ---
+# --- 2. IMPORT HANDLERS ---
 from handlers import (
     start, registration, account,
     discovery, feed, preview,
     chat, inbox, unmask, match,
     who_like_me, who_see_me,
     wallet, pricing, boost, status,
-    admin, control_panel, help as help_handler
+    admin, control_panel, help as help_handler,
+    group_cleaner,
 )
 
 # ==========================================
 # SETTING ZONA WAKTU KE ASIA/JAKARTA (UTC+7)
 # ==========================================
-os.environ['TZ'] = 'Asia/Jakarta'
+os.environ["TZ"] = "Asia/Jakarta"
 try:
-    if hasattr(time, 'tzset'):
-        time.tzset() 
+    if hasattr(time, "tzset"):
+        time.tzset()
 except Exception:
-    pass 
+    pass
 
 load_dotenv()
 
+
 async def set_bot_commands(bot: Bot):
-    """ Command scope default (tombol menu kiri bawah) """
+    """
+    Command menu hanya dipasang di private chat.
+    Di grup, command menu dihapus agar bot tidak menampilkan menu.
+    """
     commands = [
         BotCommand(command="dashboard", description="🏠 Dashboard Utama"),
         BotCommand(command="discovery", description="🌎 Swipe Jodoh"),
@@ -48,38 +57,61 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="inbox", description="💬 Pesan Masuk"),
         BotCommand(command="wallet", description="💰 Dompet & Saldo"),
         BotCommand(command="account", description="👤 Akun Saya"),
-        BotCommand(command="help", description="💡 Panduan & Bantuan")
+        BotCommand(command="help", description="💡 Panduan & Bantuan"),
     ]
-    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+
+    await bot.set_my_commands(
+        commands,
+        scope=BotCommandScopeAllPrivateChats(),
+    )
+
+    # Bersihkan command menu di semua grup.
+    await bot.delete_my_commands(
+        scope=BotCommandScopeAllGroupChats(),
+    )
+
 
 async def schedule_daily_reset(db: DatabaseService):
     tz = ZoneInfo("Asia/Jakarta")
     while True:
         now = datetime.now(tz)
-        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        next_midnight = (now + timedelta(days=1)).replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
         wait_seconds = (next_midnight - now).total_seconds()
-        
-        logging.info(f"⏰ [SCHEDULER] Menunggu {wait_seconds / 3600:.2f} Jam menuju Maintenance Reset Kuota.")
+
+        logging.info(
+            f"⏰ [SCHEDULER] Menunggu {wait_seconds / 3600:.2f} Jam menuju Maintenance Reset Kuota."
+        )
         await asyncio.sleep(wait_seconds)
-        
+
         try:
             await db.check_expired_vip()
             await db.reset_daily_quotas()
-            if datetime.now(tz).weekday() == 0:  # Hari Senin = Reset Boost
+
+            if datetime.now(tz).weekday() == 0:
                 await db.reset_weekly_quotas()
+
             logging.info("✅ MAINTENANCE (Reset Kuota & Cek VIP) BERHASIL!")
         except Exception as e:
             logging.error(f"❌ Maintenance Error: {e}")
 
+
 async def schedule_referral_evaluation_dummy():
-    """Dummy referral checker - akan diimplementasikan nanti"""
+    """
+    Dummy referral checker - akan diimplementasikan nanti.
+    """
     while True:
         await asyncio.sleep(86400)
+
 
 async def main():
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
     # --- 3. NORMALISASI URL DATABASE ---
@@ -97,12 +129,13 @@ async def main():
     # --- 4. INISIALISASI BOT & SERVICES ---
     bot = Bot(
         token=os.getenv("BOT_TOKEN"),
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
     dp = Dispatcher(storage=MemoryStorage())
-    
+
     db = DatabaseService(db_url)
-    
+
     # Inisialisasi database dengan auto-migrate
     try:
         await db.init_db()
@@ -117,11 +150,14 @@ async def main():
     # --- 5. DEPENDENCY INJECTION ---
     dp["db"] = db
     dp["payment"] = payment
-    dp["notif"] = notif_service 
+    dp["notif"] = notif_service
     dp["channel_id"] = os.getenv("CHANNEL_ID")
     dp["group_id"] = os.getenv("GROUP_ID")
 
     # --- 6. REGISTRASI ROUTER ---
+    # Group cleaner dipasang paling awal agar service message/command grup cepat tertangani.
+    dp.include_router(group_cleaner.router)
+
     dp.include_router(registration.router)
     dp.include_router(start.router)
     dp.include_router(feed.router)
@@ -154,7 +190,7 @@ async def main():
     try:
         # --- 7. SET COMMAND MENU ---
         await set_bot_commands(bot)
-        logging.info("✔️ Tombol Menu Kiri Bawah Berhasil Dipasang.")
+        logging.info("✔️ Command menu hanya aktif di private chat. Menu grup dibersihkan.")
 
         # --- 8. JALANKAN SCHEDULER ---
         daily_task = asyncio.create_task(schedule_daily_reset(db))
@@ -170,9 +206,12 @@ async def main():
     finally:
         if daily_task:
             daily_task.cancel()
+
         if referral_task:
             referral_task.cancel()
+
         await bot.session.close()
+
 
 if __name__ == "__main__":
     try:
