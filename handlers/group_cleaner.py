@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 from typing import Optional
@@ -232,6 +233,45 @@ async def clean_left_log(message: Message):
     except Exception as e:
         logging.warning(f"[GROUP CLEANER] Gagal hapus log keluar grup: {e}")
 
+@router.message(F.is_automatic_forward == True)
+async def auto_unpin_channel_post(message: Message, bot: Bot):
+    """
+    Auto-unpin postingan channel yang otomatis masuk ke discussion group.
+
+    Telegram kadang melakukan pin beberapa saat setelah post channel masuk,
+    jadi bot mencoba unpin beberapa kali dalam rentang 1-3 detik.
+    """
+    chat_id = message.chat.id if message.chat else None
+
+    if not _is_main_group(chat_id):
+        return
+
+    logging.info(
+        f"[GROUP CLEANER] Postingan channel otomatis terdeteksi. "
+        f"chat_id={chat_id}, message_id={message.message_id}"
+    )
+
+    # Coba beberapa kali karena Telegram kadang telat melakukan pin.
+    delays = [1, 2, 3]
+
+    for delay in delays:
+        try:
+            await asyncio.sleep(delay)
+
+            await bot.unpin_chat_message(
+                chat_id=chat_id,
+                message_id=message.message_id,
+            )
+
+            logging.info(
+                f"[GROUP CLEANER] Postingan channel berhasil di-unpin setelah {delay} detik."
+            )
+            return
+
+        except Exception as e:
+            logging.warning(
+                f"[GROUP CLEANER] Percobaan unpin setelah {delay} detik gagal: {e}"
+            )
 
 @router.message(F.pinned_message)
 async def clean_pin_notification(message: Message, bot: Bot):
