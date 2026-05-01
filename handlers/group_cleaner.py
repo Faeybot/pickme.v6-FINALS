@@ -112,9 +112,8 @@ async def _send_welcome_message(
 
     text = (
         f"👋 Hai <b>{names}</b>, selamat datang di <b>PickMe Indonesia</b>!\n\n"
-        f"Di {group_text}, kamu bisa ngobrol, kenalan, dan lihat update komunitas.\n\n"
-        f"Untuk mulai pakai fitur PickMe seperti dating, feed, inbox, wallet, dan akun, "
-        f"silakan buka bot melalui tombol di bawah ini."
+        f"Untuk mulai pakai fitur PickMe: Dating, Posting Menfess/Promote, Chat, dan lainnya, "
+        f"⬇️⬇️⬇️Klik tombol Bot di Bawah ini⬇️⬇️⬇️"
     )
 
     keyboard = InlineKeyboardMarkup(
