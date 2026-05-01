@@ -17,5 +17,6 @@ from . import (
     boost,
     admin,
     control_panel,
-    help
+    help,
+    group_cleaner,
 )
