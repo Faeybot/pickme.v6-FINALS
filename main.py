@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeDefault,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeAllGroupChats,
 )
@@ -21,7 +22,7 @@ from services.database import DatabaseService
 from services.payment import PaymentService
 from services.notification import NotificationService
 
-# --- 2. IMPORT HANDLERS ---
+# --- 2. IMPORT HANDLERS (Disesuaikan dengan file yang ada) ---
 from handlers import (
     start, registration, account,
     discovery, feed, preview,
@@ -47,8 +48,10 @@ load_dotenv()
 
 async def set_bot_commands(bot: Bot):
     """
-    Command menu hanya dipasang di private chat.
-    Di grup, command menu dihapus agar bot tidak menampilkan menu.
+    Command menu hanya aktif di private chat.
+
+    Sebelumnya bot memakai BotCommandScopeDefault.
+    Karena itu command default lama harus dihapus agar menu tidak muncul di grup.
     """
     commands = [
         BotCommand(command="dashboard", description="🏠 Dashboard Utama"),
@@ -60,19 +63,26 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="help", description="💡 Panduan & Bantuan"),
     ]
 
-    await bot.set_my_commands(
-        commands,
-        scope=BotCommandScopeAllPrivateChats(),
+    # 1. Hapus command lama yang tersimpan di default scope.
+    await bot.delete_my_commands(
+        scope=BotCommandScopeDefault()
     )
 
-    # Bersihkan command menu di semua grup.
+    # 2. Pasang command hanya di chat pribadi bot.
+    await bot.set_my_commands(
+        commands,
+        scope=BotCommandScopeAllPrivateChats()
+    )
+
+    # 3. Pastikan command menu tidak tersedia di semua grup.
     await bot.delete_my_commands(
-        scope=BotCommandScopeAllGroupChats(),
+        scope=BotCommandScopeAllGroupChats()
     )
 
 
 async def schedule_daily_reset(db: DatabaseService):
     tz = ZoneInfo("Asia/Jakarta")
+
     while True:
         now = datetime.now(tz)
         next_midnight = (now + timedelta(days=1)).replace(
@@ -86,16 +96,18 @@ async def schedule_daily_reset(db: DatabaseService):
         logging.info(
             f"⏰ [SCHEDULER] Menunggu {wait_seconds / 3600:.2f} Jam menuju Maintenance Reset Kuota."
         )
+
         await asyncio.sleep(wait_seconds)
 
         try:
             await db.check_expired_vip()
             await db.reset_daily_quotas()
 
-            if datetime.now(tz).weekday() == 0:
+            if datetime.now(tz).weekday() == 0:  # Hari Senin = Reset Boost
                 await db.reset_weekly_quotas()
 
             logging.info("✅ MAINTENANCE (Reset Kuota & Cek VIP) BERHASIL!")
+
         except Exception as e:
             logging.error(f"❌ Maintenance Error: {e}")
 
@@ -116,6 +128,7 @@ async def main():
 
     # --- 3. NORMALISASI URL DATABASE ---
     raw_db_url = os.getenv("DATABASE_URL")
+
     if raw_db_url:
         if raw_db_url.startswith("postgres://"):
             db_url = raw_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
@@ -197,8 +210,13 @@ async def main():
         referral_task = asyncio.create_task(schedule_referral_evaluation_dummy())
 
         await bot.delete_webhook(drop_pending_updates=True)
+
         logging.info("🚀 Bot PickMe Aktif & Siap Melayani!")
-        await dp.start_polling(bot)
+
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types(),
+        )
 
     except Exception as e:
         logging.error(f"❌ Error Saat Menjalankan Bot: {e}")
