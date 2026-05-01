@@ -22,7 +22,7 @@ from services.database import DatabaseService
 from services.payment import PaymentService
 from services.notification import NotificationService
 
-# --- 2. IMPORT HANDLERS (Disesuaikan dengan file yang ada) ---
+# --- 2. IMPORT HANDLERS ---
 from handlers import (
     start, registration, account,
     discovery, feed, preview,
@@ -49,9 +49,7 @@ load_dotenv()
 async def set_bot_commands(bot: Bot):
     """
     Command menu hanya aktif di private chat.
-
-    Sebelumnya bot memakai BotCommandScopeDefault.
-    Karena itu command default lama harus dihapus agar menu tidak muncul di grup.
+    Command default lama dan command grup dibersihkan.
     """
     commands = [
         BotCommand(command="dashboard", description="🏠 Dashboard Utama"),
@@ -63,21 +61,23 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="help", description="💡 Panduan & Bantuan"),
     ]
 
-    # 1. Hapus command lama yang tersimpan di default scope.
-    await bot.delete_my_commands(
-        scope=BotCommandScopeDefault()
-    )
+    try:
+        await bot.delete_my_commands(scope=BotCommandScopeDefault())
+    except Exception as e:
+        logging.warning(f"⚠️ Gagal hapus command default: {e}")
 
-    # 2. Pasang command hanya di chat pribadi bot.
-    await bot.set_my_commands(
-        commands,
-        scope=BotCommandScopeAllPrivateChats()
-    )
+    try:
+        await bot.set_my_commands(
+            commands,
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+    except Exception as e:
+        logging.warning(f"⚠️ Gagal set command private: {e}")
 
-    # 3. Pastikan command menu tidak tersedia di semua grup.
-    await bot.delete_my_commands(
-        scope=BotCommandScopeAllGroupChats()
-    )
+    try:
+        await bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
+    except Exception as e:
+        logging.warning(f"⚠️ Gagal hapus command grup: {e}")
 
 
 async def schedule_daily_reset(db: DatabaseService):
@@ -168,9 +168,6 @@ async def main():
     dp["group_id"] = os.getenv("GROUP_ID")
 
     # --- 6. REGISTRASI ROUTER ---
-    # Group cleaner dipasang paling awal agar service message/command grup cepat tertangani.
-    dp.include_router(group_cleaner.router)
-
     dp.include_router(registration.router)
     dp.include_router(start.router)
     dp.include_router(feed.router)
@@ -191,6 +188,9 @@ async def main():
     dp.include_router(admin.router)
     dp.include_router(control_panel.router)
 
+    # Group cleaner dipasang paling akhir agar tidak mengganggu handler private/chat utama.
+    dp.include_router(group_cleaner.router)
+
     # --- 🛡️ GLOBAL ERROR HANDLER ---
     @dp.error()
     async def global_error_handler(event: types.ErrorEvent):
@@ -203,7 +203,7 @@ async def main():
     try:
         # --- 7. SET COMMAND MENU ---
         await set_bot_commands(bot)
-        logging.info("✔️ Command menu hanya aktif di private chat. Menu grup dibersihkan.")
+        logging.info("✔️ Command menu private aktif. Menu grup dibersihkan.")
 
         # --- 8. JALANKAN SCHEDULER ---
         daily_task = asyncio.create_task(schedule_daily_reset(db))
@@ -213,10 +213,10 @@ async def main():
 
         logging.info("🚀 Bot PickMe Aktif & Siap Melayani!")
 
-        await dp.start_polling(
-            bot,
-            allowed_updates=dp.resolve_used_update_types(),
-        )
+        # PENTING:
+        # Jangan pakai allowed_updates dulu di produksi lama.
+        # Ini lebih aman untuk private chat bot lama.
+        await dp.start_polling(bot)
 
     except Exception as e:
         logging.error(f"❌ Error Saat Menjalankan Bot: {e}")
